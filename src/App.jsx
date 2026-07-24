@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info } from "lucide-react";
+import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban } from "lucide-react";
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
@@ -24,18 +24,59 @@ function normCDF(x, mean, sd) {
   return 0.5 * (1 + erf((x - mean) / (sd * Math.SQRT2)));
 }
 
-function ratingsEfectivas(ratingA, ratingB, ladoA, ladoB, solLado, viento) {
-  const penA = solLado && ladoA === solLado ? PENALIZACION_SOL : 0;
-  const penB = solLado && ladoB === solLado ? PENALIZACION_SOL : 0;
-  let a = ratingA - penA;
-  let b = ratingB - penB;
-  if (viento) {
-    const mid = (a + b) / 2;
-    const diff = (a - b) * FACTOR_VIENTO;
-    a = mid + diff / 2;
-    b = mid - diff / 2;
+function isParcial(a, b) {
+  return (a === 7 && b === 0) || (a === 0 && b === 7) ||
+         (a === 9 && b === 1) || (a === 1 && b === 9) ||
+         (a === 11 && b === 2) || (a === 2 && b === 11);
+}
+
+function isValidScore(a, b) {
+  if (a < 0 || b < 0) return false;
+  if ((a === 21 && b <= 19) || (b === 21 && a <= 19)) return true;
+  if (a >= 20 && b >= 20 && Math.abs(a - b) === 2) return true;
+  return isParcial(a, b);
+}
+
+function calcularTerminales(pA) {
+  const dp = Array(35).fill(0).map(() => Array(35).fill(0));
+  dp[0][0] = 1;
+  const pB = 1 - pA;
+  const term = [];
+
+  for(let a = 0; a < 32; a++) {
+      for(let b = 0; b < 32; b++) {
+          if (dp[a][b] === 0) continue;
+          if (isValidScore(a, b)) {
+              term.push({ a, b, p: dp[a][b] });
+          } else {
+              if (a + 1 < 35) dp[a + 1][b] += dp[a][b] * pA;
+              if (b + 1 < 35) dp[a][b + 1] += dp[a][b] * pB;
+          }
+      }
   }
-  return { a, b };
+  return term;
+}
+
+function probDesdeTerminales(terminales, a, b) {
+  const match = terminales.find(t => t.a === a && t.b === b);
+  if (!match) return 0;
+  return match.p * 0.85 + 0.005; 
+}
+
+function probPuntosIndividual(terminales, pts, isA) {
+  let sum = 0;
+  terminales.forEach(t => {
+      if (isA && t.a === pts) sum += t.p;
+      if (!isA && t.b === pts) sum += t.p;
+  });
+  if (sum === 0) return 0;
+  return sum * 0.85 + 0.005; 
+}
+
+function cuota(p, margen) {
+  const pSegura = Math.max(0.000001, p);
+  const conMargen = (1 / pSegura) / (1 + margen);
+  return Number(Math.max(1.01, conMargen).toFixed(2));
 }
 
 function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombreB) {
@@ -44,6 +85,7 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const perdedorEsperado = Math.round(19 * closeness);
 
   const ganador = { A: cuota(pA, margen), B: cuota(pB, margen), pA, pB };
+  const terminales = calcularTerminales(pA);
 
   const perdedorEsperadoA = perdedorEsperadoJugador(historial, nombreA, perdedorEsperado);
   const perdedorEsperadoB = perdedorEsperadoJugador(historial, nombreB, perdedorEsperado);
@@ -55,20 +97,30 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
   const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
 
-  const probParcialesTeo = normCDF(2.5, perdedorEsperado, SD_PUNTOS);
-  const probAjustadoTeo = Math.max(0, normCDF(20.5, perdedorEsperado, SD_PUNTOS) - normCDF(19.5, perdedorEsperado, SD_PUNTOS));
-  const emp = analizarComoTermina(historial || []);
-  const PESO_TEORICO = 6;
-  const probParciales = (probParcialesTeo * PESO_TEORICO + emp.nParciales) / (PESO_TEORICO + emp.total);
-  const probAjustado = (probAjustadoTeo * PESO_TEORICO + emp.nAjustado) / (PESO_TEORICO + emp.total);
+  let probParciales = 0;
+  let probAjustado = 0;
+  terminales.forEach(t => {
+      if (isParcial(t.a, t.b)) probParciales += t.p;
+      else if (t.a >= 22 || t.b >= 22) probAjustado += t.p;
+  });
   const probNormal = Math.max(0.01, 1 - probParciales - probAjustado);
+
   const comoTermina = {
-    parciales: cuota(probParciales, margen),
+    parciales: cuota(probParciales * 0.85 + 0.02, margen),
     normal: cuota(probNormal, margen),
-    ajustado: cuota(probAjustado, margen),
+    ajustado: cuota(probAjustado * 0.85 + 0.02, margen),
   };
 
-  return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
+  const resultadosExactos = [
+    { marcador: `21-12`, p: probDesdeTerminales(terminales, 21, 12) },
+    { marcador: `21-15`, p: probDesdeTerminales(terminales, 21, 15) },
+    { marcador: `21-19`, p: probDesdeTerminales(terminales, 21, 19) },
+    { marcador: `12-21`, p: probDesdeTerminales(terminales, 12, 21) },
+    { marcador: `15-21`, p: probDesdeTerminales(terminales, 15, 21) },
+    { marcador: `19-21`, p: probDesdeTerminales(terminales, 19, 21) },
+  ].map(res => ({ marcador: res.marcador, cuota: cuota(res.p, margen) }));
+
+  return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, resultadosExactos, terminales, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
 }
 
 function perdedorEsperadoJugador(historial, nombre, generico) {
@@ -98,65 +150,11 @@ function analizarComoTermina(historial) {
     const winnerScore = ganoA ? p.pa : p.pb;
     const loserScore = ganoA ? p.pb : p.pa;
     total++;
-    if (loserScore <= 2) nParciales++;
+    if (isParcial(p.pa, p.pb)) nParciales++;
     else if (winnerScore > 21) nAjustado++;
     else nNormal++;
   });
   return { nParciales, nNormal, nAjustado, total };
-}
-
-// NUEVA FUNCIÓN DE CUOTA SIN LÍMITE ARTIFICIAL DE 50
-function cuota(p, margen) {
-  const pSegura = Math.max(0.000001, p);
-  const conMargen = (1 / pSegura) / (1 + margen);
-  return Number(Math.max(1.01, conMargen).toFixed(2));
-}
-
-function probPuntosExactosIndividual(pts, isA, pA, pB, perdEspA, perdEspB) {
-  if (pts < 0) return 0;
-  const SD = SD_PUNTOS;
-  const probDiscreta = (x, mean) => Math.max(0, normCDF(x + 0.5, mean, SD) - normCDF(x - 0.5, mean, SD));
-  const tailProb = (mean) => Math.max(0, 1 - normCDF(19.5, mean, SD));
-
-  if (pts < 20) {
-      return isA ? (pB * probDiscreta(pts, perdEspA)) : (pA * probDiscreta(pts, perdEspB));
-  } else if (pts === 20) {
-      return isA ? (pB * probDiscreta(20, perdEspA)) : (pA * probDiscreta(20, perdEspB));
-  } else if (pts === 21) {
-      return isA ? (pA * (1 - tailProb(perdEspB))) : (pB * (1 - tailProb(perdEspA)));
-  } else {
-      const pWinDeuce = isA ? pA : pB;
-      const pLoseDeuce = isA ? pB : pA;
-      const meanLoser = isA ? perdEspA : perdEspB;
-      const meanLoserOfRival = isA ? perdEspB : perdEspA;
-
-      const baseDeuceWin = pWinDeuce * tailProb(meanLoserOfRival);
-      const baseDeuceLose = pLoseDeuce * tailProb(meanLoser);
-
-      const probWin = baseDeuceWin * 0.5 * Math.pow(0.6, pts - 22);
-      const probLose = baseDeuceLose * 0.5 * Math.pow(0.6, pts - 20);
-
-      return probWin + probLose;
-  }
-}
-
-function probResultadoExacto(pa, pb, pA, pB, perdEspA, perdEspB) {
-  const SD = SD_PUNTOS;
-  const probDiscreta = (x, mean) => Math.max(0, normCDF(x + 0.5, mean, SD) - normCDF(x - 0.5, mean, SD));
-  const tailProb = (mean) => Math.max(0, 1 - normCDF(19.5, mean, SD));
-
-  if (pa === 21 && pb < 20) {
-      return pA * probDiscreta(pb, perdEspB);
-  } else if (pb === 21 && pa < 20) {
-      return pB * probDiscreta(pa, perdEspA);
-  } else {
-      const baseDeuceA = pA * tailProb(perdEspB);
-      const baseDeuceB = pB * tailProb(perdEspA);
-      const winA = pa > pb;
-      const ptsDeuce = Math.min(pa, pb);
-      const decay = Math.pow(0.6, ptsDeuce - 20);
-      return (winA ? baseDeuceA : baseDeuceB) * 0.5 * decay;
-  }
 }
 
 const TOPE_AJUSTE_DINERO = 0.15;
@@ -195,6 +193,7 @@ function claveBoost(mercado, seleccion) {
 }
 function boostDe(partido, mercado, seleccion) {
   const v = partido?.boosts?.[claveBoost(mercado, seleccion)];
+  if (v === "LOCKED") return "LOCKED";
   return (typeof v === "number" && v >= 1.01) ? v : null;
 }
 
@@ -275,8 +274,13 @@ function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, solLado, v
   return { deltaA: K_FACTOR * (sA - pA), deltaB: K_FACTOR * (sB - pB) };
 }
 
-function evaluarPata(mercado, seleccion, ctx) {
+function evaluarPata(mercado, seleccion, ctx, customResults = {}) {
   const { ganador, pa, pb, nombreA, nombreB } = ctx;
+  
+  if (customResults[`${mercado}||${seleccion}`] !== undefined) {
+      return customResults[`${mercado}||${seleccion}`];
+  }
+
   const margen = Math.abs(pa - pb);
   if (mercado === "Ganador") return seleccion === ganador;
   if (mercado === "Resultado Exacto Partido") return seleccion === `${pa}-${pb}`;
@@ -305,16 +309,15 @@ function evaluarPata(mercado, seleccion, ctx) {
     const ganoA = pa > pb;
     const winnerScore = ganoA ? pa : pb;
     const loserScore = ganoA ? pb : pa;
-    if (seleccion === "parciales") return loserScore <= 2;
-    if (seleccion === "ajustado") return winnerScore > 21;
-    if (seleccion === "normal") return winnerScore <= 21 && loserScore >= 3;
+    if (seleccion === "parciales") return isParcial(pa, pb);
+    if (seleccion === "ajustado") return winnerScore >= 22;
+    if (seleccion === "normal") return winnerScore === 21 && loserScore >= 3 && loserScore <= 19;
   }
   return false;
 }
 
 function sonContradictorias(a, b) {
-  // Ya no usamos esto para bloquear mercados core entre sí porque hemos bloqueado por completo
-  // que dos mercados Core puedan estar en la misma combinada.
+  if (a.mercado === "Ganador" && b.mercado === "Ganador" && a.seleccion !== b.seleccion) return true;
   return false;
 }
 
@@ -503,7 +506,7 @@ function generarTitular(p, coronacion, rachaRota) {
   let base;
   if (p.pa > 21 || p.pb > 21) {
     base = `${ganador} sufre pero tumba a ${perdedor} en un ajustadísimo ${marcador}`;
-  } else if (margen >= 15) {
+  } else if (margen >= 15 || isParcial(p.pa, p.pb)) {
     base = `${ganador} arrasa a ${perdedor} (${marcador})`;
   } else if (margen <= 4) {
     base = `${ganador} se impone por la mínima a ${perdedor}, ${marcador}`;
@@ -523,11 +526,10 @@ function calcularRankingEstilo(historial) {
     if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
     const [a] = p.teamA, [b] = p.teamB;
     const ganoA = p.pa > p.pb;
-    const ganador = ganoA ? a : b, perdedor = ganoA ? b : a;
-    const loserScore = ganoA ? p.pb : p.pa;
-    const esDeuce = p.pa > 21 || p.pb > 21;
+    const ganador = ganoA ? a : b;
+    const esDeuce = p.pa >= 22 || p.pb >= 22;
     ensure(a); ensure(b);
-    if (loserScore <= 2) porJugador[ganador].parciales += 1;
+    if (isParcial(p.pa, p.pb)) porJugador[ganador].parciales += 1;
     if (esDeuce) {
       porJugador[a].deuceJugados += 1; porJugador[b].deuceJugados += 1;
       porJugador[ganador].deuceGanados += 1;
@@ -538,7 +540,7 @@ function calcularRankingEstilo(historial) {
     .sort((x, y) => (campo === "deuce" ? (y[1].deuceGanados / y[1].deuceJugados) - (x[1].deuceGanados / x[1].deuceJugados) : y[1][campo] - x[1][campo]))[0];
   return {
     reyParciales: top("parciales", 1),
-    reyDeuce: top("deuce", 2),
+    reyDeuce: top("deuce", 1),
     porJugador,
   };
 }
@@ -568,7 +570,7 @@ const STORAGE_KEY = "casa-pingpong-estado-v1";
 
 const ESTADO_DEFECTO = {
   jugadores: {}, gm: null, pendiente: null, margen: 0.08,
-  bettors: {}, partidoAbierto: null, historial: [],
+  bettors: {}, partidoAbierto: null, historial: [], vetados: [],
 };
 
 async function cargarEstado() {
@@ -649,7 +651,7 @@ function construirEstadoDesdeHistorialReal() {
       apuestas: [],
     });
   });
-  return { jugadores, gm, pendiente, margen: 0.08, bettors: {}, partidoAbierto: null, historial: historial.reverse() };
+  return { jugadores, gm, pendiente, margen: 0.08, bettors: {}, partidoAbierto: null, historial: historial.reverse(), vetados: [] };
 }
 
 function colorFromName(name) {
@@ -685,7 +687,17 @@ function Chip({ children, tone = "gold" }) {
   );
 }
 
-function BotonCuota({ etiqueta, valor, valorBase, boosteado, onClick, disabled, sub, activo }) {
+function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, disabled, sub, activo }) {
+  if (locked) {
+    return (
+      <button disabled className="relative flex-1 c-minw-84 rounded-lg px-2 py-2.5 text-center border-2 c-bg-app c-bd-1 opacity-50 cursor-not-allowed">
+        <div className="absolute top-1 right-1"><Lock size={12} className="c-text-2" /></div>
+        <div className="text-[10.5px] leading-tight font-semibold truncate c-text-2">{etiqueta}</div>
+        {sub && <div className="text-[9px] c-text-2">{sub}</div>}
+        <div className="font-extrabold text-base mt-0.5 c-text-2">BLOQ</div>
+      </button>
+    );
+  }
   return (
     <button
       onClick={onClick}
@@ -818,7 +830,6 @@ function TicketApuesta({ bettor, apuestas, onCerrar }) {
   );
 }
 
-// MODAL PARA EXPLICAR LA APUESTA AL PINCHAR EN ELLA
 function traducirPata(mercado, seleccion) {
   if (mercado === "Ganador") return `${seleccion} gana el partido.`;
   if (mercado === "Resultado Exacto Partido") return `El partido termina exactamente ${seleccion}.`;
@@ -838,8 +849,8 @@ function traducirPata(mercado, seleccion) {
       return `${j} se queda en ${Math.floor(linea)} puntos o menos.`;
   }
   if (mercado === "Cómo termina") {
-      if (seleccion === "parciales") return `El perdedor se queda en 2 puntos o menos (paliza).`;
-      if (seleccion === "ajustado") return `El partido se va al deuce (ej. 22-20 o más).`;
+      if (seleccion === "parciales") return `El perdedor se queda en 2, 1 o 0 puntos (7-0, 9-1, 11-2...).`;
+      if (seleccion === "ajustado") return `El partido se va al deuce (22-20, 23-21, etc.).`;
       if (seleccion === "normal") return `Termina a 21 normal, el perdedor hace entre 3 y 19 puntos.`;
   }
   return `${mercado}: ${seleccion}`;
@@ -1008,6 +1019,12 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
   );
 }
 
+const Lock = ({ size, className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+  </svg>
+);
+
 export default function CasaApuestasPingpong() {
   const [estado, setEstado] = useState(null);
   const [cargando, setCargando] = useState(true);
@@ -1030,7 +1047,6 @@ export default function CasaApuestasPingpong() {
   const [lineaB, setLineaB] = useState(12);
   const [ticketVisible, setTicketVisible] = useState(null);
   
-  // NUEVOS ESTADOS DE CREADOR DE RESULTADOS EXACTOS
   const [ptsCreatorA, setPtsCreatorA] = useState("");
   const [ptsCreatorB, setPtsCreatorB] = useState("");
   const [detalleApuestaVisible, setDetalleApuestaVisible] = useState(null);
@@ -1054,6 +1070,8 @@ export default function CasaApuestasPingpong() {
   const [nombreMercadoCustom, setNombreMercadoCustom] = useState("");
   const [seleccionMercadoCustom, setSeleccionMercadoCustom] = useState("");
   const [cuotaMercadoCustom, setCuotaMercadoCustom] = useState("");
+
+  const [resolviendoCustoms, setResolviendoCustoms] = useState(null);
 
   const prevSlipLen = useRef(0);
 
@@ -1079,11 +1097,20 @@ export default function CasaApuestasPingpong() {
       let nuevaCuota = s.cuota;
       let boostEncontrado = boostDe(partidoActual, s.mercado, s.seleccion);
       
+      if (boostEncontrado === "LOCKED") return s; // Dejamos la cuota igual, al confirmar avisará
+      
       if (boostEncontrado) {
         nuevaCuota = boostEncontrado;
       } else if (s.mercado === "Ganador") {
         if (s.seleccion === partidoActual.a) nuevaCuota = ganDineroTemp.A;
         if (s.seleccion === partidoActual.b) nuevaCuota = ganDineroTemp.B;
+      } else if (s.mercado === "Resultado Exacto Partido") {
+        const itemRes = mercadosTemp.resultadosExactos.find(r => r.marcador === s.seleccion);
+        if (itemRes) nuevaCuota = itemRes.cuota;
+      } else if (s.mercado.startsWith("Puntos Exactos")) {
+        const pts = Number(s.seleccion);
+        const jugA = s.mercado.replace("Puntos Exactos ", "") === partidoActual.a;
+        nuevaCuota = cuota(probPuntosIndividual(mercadosTemp.terminales, pts, jugA), estado.margen);
       } else if (s.mercado === "Cómo termina") {
         if (s.seleccion === "parciales") nuevaCuota = mercadosTemp.comoTermina.parciales;
         if (s.seleccion === "normal") nuevaCuota = mercadosTemp.comoTermina.normal;
@@ -1213,8 +1240,8 @@ export default function CasaApuestasPingpong() {
 
   function abrirEditorCuota(mercado, seleccion, valorBase, etiqueta) {
     const actual = boostDe(partido, mercado, seleccion);
-    setEditarCuotaObjetivo({ mercado, seleccion, valorBase, etiqueta });
-    setEditarCuotaInput(actual ? String(actual) : "");
+    setEditarCuotaObjetivo({ mercado, seleccion, valorBase, etiqueta, isLocked: actual === "LOCKED" });
+    setEditarCuotaInput(actual === "LOCKED" ? "" : (actual ? String(actual) : ""));
     setError("");
   }
 
@@ -1224,22 +1251,28 @@ export default function CasaApuestasPingpong() {
     const val = valorLimpio ? Number(valorLimpio) : null;
     
     if (valorLimpio && (!val || val < 1.01)) {
-      setError("La cuota mejorada tiene que ser un número válido de al menos 1.01.");
+      setError("La cuota debe ser 1.01 o más.");
       return;
     }
     const nuevosBoosts = { ...(partido.boosts || {}) };
     const clave = claveBoost(mercado, seleccion);
     
-    if (val) {
-      nuevosBoosts[clave] = Number(val.toFixed(2));
-    } else {
-      delete nuevosBoosts[clave];
-    }
+    if (val) nuevosBoosts[clave] = Number(val.toFixed(2));
+    else delete nuevosBoosts[clave];
     
     persistir({ ...estado, partidoAbierto: { ...partido, boosts: nuevosBoosts } });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
     setError("");
+  }
+
+  function bloquearCuota() {
+    const { mercado, seleccion } = editarCuotaObjetivo;
+    const nuevosBoosts = { ...(partido.boosts || {}) };
+    nuevosBoosts[claveBoost(mercado, seleccion)] = "LOCKED";
+    persistir({ ...estado, partidoAbierto: { ...partido, boosts: nuevosBoosts } });
+    setEditarCuotaObjetivo(null);
+    setEditarCuotaInput("");
   }
 
   function quitarCuotaEditada() {
@@ -1256,7 +1289,9 @@ export default function CasaApuestasPingpong() {
       abrirEditorCuota(mercado, seleccion, valorBase, etiqueta);
       return;
     }
-    const valorFinal = boostDe(partido, mercado, seleccion) ?? valorBase;
+    const status = boostDe(partido, mercado, seleccion);
+    if (status === "LOCKED") return;
+    const valorFinal = status ?? valorBase;
     toggleSlip(mercado, seleccion, Number(valorFinal.toFixed(2)));
   }
 
@@ -1268,12 +1303,10 @@ export default function CasaApuestasPingpong() {
     const existente = estaEnSlip(mercado, seleccion);
     if (existente) { setSlip(slip.filter((s) => s.id !== existente.id)); return; }
     
-    // BLOQUEADOR INTELIGENTE DE CORRELACIONES PARA COMBINADAS (SGP Blocker)
-    const coreMarkets = ["Ganador", "Hándicap", "Puntos", "Cómo termina", "Resultado", "Puntos Exactos"];
-    const isCore = (m) => coreMarkets.some(c => m.startsWith(c));
-    
-    if (isCore(mercado) && slip.some(s => isCore(s.mercado))) {
-      setError(`No puedes combinar apuestas principales del mismo partido (ej. Ganador + Puntos) porque están ligadas matemáticamente y las cuotas se multiplicarían de forma irreal. Juegalas por separado.`);
+    const nuevaSel = { mercado, seleccion };
+    const conflicto = slip.find((s) => sonContradictorias(s, nuevaSel));
+    if (conflicto) {
+      setError(`"${seleccion}" es contraria a "${conflicto.seleccion}".`);
       return;
     }
 
@@ -1292,6 +1325,12 @@ export default function CasaApuestasPingpong() {
   function confirmarSlip() {
     const nombre = bettorSlip.trim();
     if (!nombre) { setError("Pon el nombre de quién apuesta."); return; }
+    if (estado.vetados?.includes(nombre)) { setError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
+    
+    // Check locked cuotas in slip
+    const hasLocked = slip.some(s => boostDe(partido, s.mercado, s.seleccion) === "LOCKED");
+    if (hasLocked) { setError("Una de las cuotas de tu cesta acaba de ser bloqueada por la casa. Quítala para continuar."); return; }
+
     const saldoActual = estado.bettors[nombre] ?? 500;
     const rachaApostante = calcularRachaApuestas(estado.historial, nombre);
     const bonus = bonusPorRachaApostante(rachaApostante);
@@ -1304,14 +1343,14 @@ export default function CasaApuestasPingpong() {
       setError("");
       const apuesta = {
         id: Date.now(), bettor: nombre, tipo: "combinada",
-        patas: slip.map((s) => ({ mercado: s.mercado, seleccion: s.seleccion, cuota: Number(s.cuota.toFixed(2)), boosteada: !!boostDe(partido, s.mercado, s.seleccion) && boostDe(partido, s.mercado, s.seleccion) > s.cuota })),
+        patas: slip.map((s) => ({ mercado: s.mercado, seleccion: s.seleccion, cuota: Number(s.cuota.toFixed(2)), boosteada: typeof boostDe(partido, s.mercado, s.seleccion) === "number" && boostDe(partido, s.mercado, s.seleccion) > s.cuota })),
         cuota: cuotaTotal, stake: stakeVal, estado: "pendiente", bonusRacha: bonus > 1 ? bonus : null,
       };
       const nuevosBettors = { ...estado.bettors, [nombre]: Number((saldoActual - stakeVal).toFixed(2)) };
       const nuevoPartido = { ...partido, apuestas: [...partido.apuestas, apuesta] };
       persistir({ ...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido });
       setTicketVisible({ bettor: nombre, apuestas: [apuesta] });
-      if (slip.some((s) => { const b = boostDe(partido, s.mercado, s.seleccion); return b && b > s.cuota; })) {
+      if (slip.some((s) => typeof boostDe(partido, s.mercado, s.seleccion) === "number" && boostDe(partido, s.mercado, s.seleccion) > s.cuota)) {
         setCelebracion({ nombre, tipo: "supercuota" });
       }
       setSlip([]); setSlipOpen(false); setBettorSlip(""); setStakeCombinada("50");
@@ -1325,7 +1364,7 @@ export default function CasaApuestasPingpong() {
     const nuevasApuestas = slip.map((s) => {
       const cuotaFinalCalc = Number((s.cuota * bonus).toFixed(2));
       const bOriginal = boostDe(partido, s.mercado, s.seleccion);
-      const esBoostReal = bOriginal !== null && bOriginal > s.cuota;
+      const esBoostReal = typeof bOriginal === "number" && bOriginal > s.cuota;
       return { 
         id: s.id, bettor: nombre, mercado: s.mercado, seleccion: s.seleccion, 
         cuota: cuotaFinalCalc, stake: Number(s.stake.toFixed(2)), estado: "pendiente", 
@@ -1367,11 +1406,39 @@ export default function CasaApuestasPingpong() {
     persistir({ ...estado, partidoAbierto: partidoActualizado });
   }
 
-  function registrarResultado() {
+  function toggleVeto(nombre) {
+    const vetados = estado.vetados || [];
+    if (vetados.includes(nombre)) persistir({...estado, vetados: vetados.filter(n => n !== nombre)});
+    else persistir({...estado, vetados: [...vetados, nombre]});
+  }
+
+  function anularApuesta(idApuesta) {
+    if (!window.confirm("¿Seguro que quieres anular esta apuesta y devolver las fichas?")) return;
+    const ap = partido.apuestas.find(a => a.id === idApuesta);
+    if (!ap) return;
+    const nuevosBettors = {...estado.bettors};
+    nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
+    const nuevoPartido = {...partido, apuestas: partido.apuestas.filter(a => a.id !== idApuesta)};
+    persistir({...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido});
+  }
+
+  function iniciarCierrePartido() {
     const pa = Number(marcador.a), pb = Number(marcador.b);
-    if (isNaN(pa) || isNaN(pb) || pa === pb) { setError("Introduce un marcador válido (sin empate)."); return; }
-    if (Math.abs(pa - pb) < 2) { setError("En pingpong se gana por al menos 2 puntos de diferencia."); return; }
+    if (isNaN(pa) || isNaN(pb) || pa === pb) { setError("Introduce un marcador válido."); return; }
+    if (!isValidScore(pa, pb)) { setError("Ese marcador no es un resultado válido para acabar un partido (tiene que llegar a 21 ganando de 2, o ser un parcial válido como 7-0)."); return; }
     setError("");
+
+    if (partido.mercadosCustom && partido.mercadosCustom.length > 0) {
+      const respuestasDefecto = {};
+      partido.mercadosCustom.forEach(c => { respuestasDefecto[`${c.mercado}||${c.seleccion}`] = false; });
+      setResolviendoCustoms({ respuestas: respuestasDefecto });
+      return;
+    }
+    procesarCierrePartido({});
+  }
+
+  function procesarCierrePartido(customResults) {
+    const pa = Number(marcador.a), pb = Number(marcador.b);
     const ratingA0 = ratingDe(partido.a), ratingB0 = ratingDe(partido.b);
     const ganoA = pa > pb;
     const ganador = ganoA ? partido.a : partido.b;
@@ -1387,24 +1454,14 @@ export default function CasaApuestasPingpong() {
     const apuestasResueltas = partido.apuestas.map((ap) => {
       if (ap.tipo === "combinada") {
         const patasResueltas = ap.patas.map((p) => {
-           let aciertoPata = false;
-           if (partido.mercadosCustom && partido.mercadosCustom.some(c => c.mercado === p.mercado && c.seleccion === p.seleccion)) {
-               aciertoPata = p.seleccion.toLowerCase().includes(ganador.toLowerCase()) || (p.mercado.toLowerCase().includes("resultado") && p.seleccion === `${pa}-${pb}`);
-           } else {
-               aciertoPata = evaluarPata(p.mercado, p.seleccion, ctx);
-           }
+           const aciertoPata = evaluarPata(p.mercado, p.seleccion, ctx, customResults);
            return { ...p, acertada: aciertoPata };
         });
         const todasAciertan = patasResueltas.every((p) => p.acertada);
         return { ...ap, patas: patasResueltas, estado: todasAciertan ? "ganada" : "perdida" };
       }
       
-      let acierto = false;
-      if (partido.mercadosCustom && partido.mercadosCustom.some(c => c.mercado === ap.mercado && c.seleccion === ap.seleccion)) {
-        acierto = ap.seleccion.toLowerCase().includes(ganador.toLowerCase()) || (ap.mercado.toLowerCase().includes("resultado") && ap.seleccion === `${pa}-${pb}`);
-      } else {
-        acierto = evaluarPata(ap.mercado, ap.seleccion, ctx);
-      }
+      const acierto = evaluarPata(ap.mercado, ap.seleccion, ctx, customResults);
       return { ...ap, estado: acierto ? "ganada" : "perdida" };
     });
 
@@ -1437,6 +1494,7 @@ export default function CasaApuestasPingpong() {
       historial: [partidoCerrado, ...estado.historial],
     });
     setMarcador({ a: "", b: "" });
+    setResolviendoCustoms(null);
   }
 
   function eliminarPartidoHistorial(idPartido) {
@@ -1489,9 +1547,10 @@ export default function CasaApuestasPingpong() {
   
   const conBoost = (mercado, seleccion, base) => {
     const b = partido ? boostDe(partido, mercado, seleccion) : null;
-    const valorReal = b ?? base;
-    const esRealBoost = b !== null && b > base;
-    return { valor: valorReal, base, boosteado: !modoEspectador && esRealBoost };
+    const isLocked = b === "LOCKED";
+    const valorReal = isLocked ? null : (b ?? base);
+    const esRealBoost = b !== null && !isLocked && b > base;
+    return { valor: valorReal, base, boosteado: !modoEspectador && esRealBoost, locked: isLocked };
   };
 
   const bGanadorA = ganadorConDinero ? conBoost("Ganador", partido.a, ganadorConDinero.A) : null;
@@ -1524,32 +1583,26 @@ export default function CasaApuestasPingpong() {
   const bComoNormal = mercados ? conBoost("Cómo termina", "normal", mercados.comoTermina.normal) : null;
   const bComoAjustado = mercados ? conBoost("Cómo termina", "ajustado", mercados.comoTermina.ajustado) : null;
   
-  const hayBoostsActivos = partido?.boosts && Object.keys(partido.boosts).length > 0;
+  const hayBoostsActivos = partido?.boosts && Object.values(partido.boosts).some(v => typeof v === "number" && v > 1.01);
   const totalSlipStake = slip.reduce((s, x) => s + x.stake, 0);
   const totalSlipPremio = slip.reduce((s, x) => s + x.stake * x.cuota, 0);
 
-  // LOGICA PARA EL CREADOR DE RESULTADOS EXACTOS
   const pAInt = parseInt(ptsCreatorA);
   const pBInt = parseInt(ptsCreatorB);
   const hasA = !isNaN(pAInt);
   const hasB = !isNaN(pBInt);
 
-  let isValidScore = false;
+  let isValScore = false;
   let cuotaPartido = null;
   if (hasA && hasB) {
-      if ((pAInt === 21 && pBInt <= 19 && pBInt >= 0) || 
-          (pBInt === 21 && pAInt <= 19 && pAInt >= 0) || 
-          (pAInt >= 20 && pBInt >= 20 && Math.abs(pAInt - pBInt) === 2)) {
-          isValidScore = true;
-          if (mercados) {
-             const pRes = probResultadoExacto(pAInt, pBInt, mercados.ganador.pA, mercados.ganador.pB, mercados.perdedorEsperadoA, mercados.perdedorEsperadoB);
-             cuotaPartido = cuota(pRes, estado.margen);
-          }
+      if (isValidScore(pAInt, pBInt)) {
+          isValScore = true;
+          if (mercados) cuotaPartido = cuota(probDesdeTerminales(mercados.terminales, pAInt, pBInt), estado.margen);
       }
   }
 
-  const cuotaPtsA = (hasA && pAInt >= 0 && mercados) ? cuota(probPuntosExactosIndividual(pAInt, true, mercados.ganador.pA, mercados.ganador.pB, mercados.perdedorEsperadoA, mercados.perdedorEsperadoB), estado.margen) : null;
-  const cuotaPtsB = (hasB && pBInt >= 0 && mercados) ? cuota(probPuntosExactosIndividual(pBInt, false, mercados.ganador.pA, mercados.ganador.pB, mercados.perdedorEsperadoA, mercados.perdedorEsperadoB), estado.margen) : null;
+  const cuotaPtsA = (hasA && pAInt >= 0 && mercados) ? cuota(probPuntosIndividual(mercados.terminales, pAInt, true), estado.margen) : null;
+  const cuotaPtsB = (hasB && pBInt >= 0 && mercados) ? cuota(probPuntosIndividual(mercados.terminales, pBInt, false), estado.margen) : null;
 
   const bPtsA = cuotaPtsA ? conBoost(`Puntos Exactos ${partido?.a}`, String(pAInt), cuotaPtsA) : null;
   const bPtsB = cuotaPtsB ? conBoost(`Puntos Exactos ${partido?.b}`, String(pBInt), cuotaPtsB) : null;
@@ -1841,12 +1894,11 @@ export default function CasaApuestasPingpong() {
                 </div>
               )}
               <div className="flex gap-2">
-                <BotonCuota etiqueta={partido.a} valor={bGanadorA.valor} valorBase={bGanadorA.base} boosteado={bGanadorA.boosteado} activo={!!estaEnSlip("Ganador", partido.a)} onClick={() => manejarClicCuota("Ganador", partido.a, ganadorConDinero.A, partido.a)} />
-                <BotonCuota etiqueta={partido.b} valor={bGanadorB.valor} valorBase={bGanadorB.base} boosteado={bGanadorB.boosteado} activo={!!estaEnSlip("Ganador", partido.b)} onClick={() => manejarClicCuota("Ganador", partido.b, ganadorConDinero.B, partido.b)} />
+                <BotonCuota etiqueta={partido.a} valor={bGanadorA.valor} valorBase={bGanadorA.base} boosteado={bGanadorA.boosteado} locked={bGanadorA.locked} activo={!!estaEnSlip("Ganador", partido.a)} onClick={() => manejarClicCuota("Ganador", partido.a, ganadorConDinero.A, partido.a)} />
+                <BotonCuota etiqueta={partido.b} valor={bGanadorB.valor} valorBase={bGanadorB.base} boosteado={bGanadorB.boosteado} locked={bGanadorB.locked} activo={!!estaEnSlip("Ganador", partido.b)} onClick={() => manejarClicCuota("Ganador", partido.b, ganadorConDinero.B, partido.b)} />
               </div>
             </Panel>
 
-            {/* CREADOR DE RESULTADOS Y PUNTOS EXACTOS */}
             <Panel icon={Ticket} titulo="Creador de Resultados y Puntos">
               <div className="flex items-center gap-2 mb-3">
                 <div className="flex-1">
@@ -1865,7 +1917,7 @@ export default function CasaApuestasPingpong() {
                   {cuotaPtsA !== null && ptsCreatorA !== "" && (
                      <BotonCuota 
                        etiqueta={`${partido.a} hace`} sub={`${ptsCreatorA} pts exactos`} 
-                       valor={bPtsA?.valor ?? cuotaPtsA} valorBase={cuotaPtsA} boosteado={bPtsA?.boosteado} 
+                       valor={bPtsA?.valor ?? cuotaPtsA} valorBase={cuotaPtsA} boosteado={bPtsA?.boosteado} locked={bPtsA?.locked}
                        activo={!!estaEnSlip(`Puntos Exactos ${partido.a}`, String(pAInt))} 
                        onClick={() => manejarClicCuota(`Puntos Exactos ${partido.a}`, String(pAInt), cuotaPtsA, `${partido.a} hace ${pAInt} pts`)} 
                      />
@@ -1873,52 +1925,52 @@ export default function CasaApuestasPingpong() {
                   {cuotaPtsB !== null && ptsCreatorB !== "" && (
                      <BotonCuota 
                        etiqueta={`${partido.b} hace`} sub={`${ptsCreatorB} pts exactos`} 
-                       valor={bPtsB?.valor ?? cuotaPtsB} valorBase={cuotaPtsB} boosteado={bPtsB?.boosteado} 
+                       valor={bPtsB?.valor ?? cuotaPtsB} valorBase={cuotaPtsB} boosteado={bPtsB?.boosteado} locked={bPtsB?.locked}
                        activo={!!estaEnSlip(`Puntos Exactos ${partido.b}`, String(pBInt))} 
                        onClick={() => manejarClicCuota(`Puntos Exactos ${partido.b}`, String(pBInt), cuotaPtsB, `${partido.b} hace ${pBInt} pts`)} 
                      />
                   )}
                 </div>
                 
-                {isValidScore && cuotaPartido !== null && (
+                {isValScore && cuotaPartido !== null && (
                    <div className="pt-1 border-t c-bd-1 mt-1">
                      <BotonCuota 
                        etiqueta="Terminan exactamente" sub={`${pAInt} - ${pBInt}`} 
-                       valor={bResPartido?.valor ?? cuotaPartido} valorBase={cuotaPartido} boosteado={bResPartido?.boosteado} 
+                       valor={bResPartido?.valor ?? cuotaPartido} valorBase={cuotaPartido} boosteado={bResPartido?.boosteado} locked={bResPartido?.locked}
                        activo={!!estaEnSlip(`Resultado Exacto Partido`, `${pAInt}-${pBInt}`)} 
                        onClick={() => manejarClicCuota(`Resultado Exacto Partido`, `${pAInt}-${pBInt}`, cuotaPartido, `Quedan ${pAInt}-${pBInt}`)} 
                      />
                    </div>
                 )}
-                {!isValidScore && ptsCreatorA !== "" && ptsCreatorB !== "" && (
+                {!isValScore && ptsCreatorA !== "" && ptsCreatorB !== "" && (
                    <div className="text-[10px] c-text-2 text-center">
-                     Ese resultado ({pAInt}-{pBInt}) no es un final válido de ping-pong (se juega a 21 y se gana por 2).
+                     Ese resultado ({pAInt}-{pBInt}) no es un final válido de ping-pong (se juega a 21 y se gana por 2, o es un parcial: 7-0, 9-1, 11-2).
                    </div>
                 )}
               </div>
             </Panel>
 
-            {/* MERCADOS PERSONALIZADOS LIBRES AÑADIDOS POR EL BOSS */}
             {partido.mercadosCustom && partido.mercadosCustom.length > 0 && (
               <Panel icon={Plus} titulo="Mercados personalizados (Libre)">
                 <div className="space-y-2">
                   {partido.mercadosCustom.map(custom => {
                     const activo = !!estaEnSlip(custom.mercado, custom.seleccion);
+                    const bCustom = conBoost(custom.mercado, custom.seleccion, custom.cuota);
                     return (
                       <div key={custom.id} className="flex items-center gap-2">
                         <div className="flex-1">
                           <BotonCuota 
                             etiqueta={`${custom.mercado}: ${custom.seleccion}`} 
-                            valor={custom.cuota} 
+                            valor={bCustom.valor ?? custom.cuota} 
                             valorBase={custom.cuota} 
-                            boosteado={false} 
+                            boosteado={bCustom.boosteado} locked={bCustom.locked}
                             activo={activo} 
                             onClick={() => manejarClicCuota(custom.mercado, custom.seleccion, custom.cuota, `${custom.mercado} - ${custom.seleccion}`)} 
                           />
                         </div>
                         {!modoEspectador && (
                           <button onClick={() => eliminarMercadoCustom(custom.id)} className="text-red-500 hover:text-red-700 p-1">
-                            <X size={16} />
+                            <Trash2 size={16} />
                           </button>
                         )}
                       </div>
@@ -1938,8 +1990,8 @@ export default function CasaApuestasPingpong() {
                 </div>
                 {handicapVivo && (handicapLados.mostrarMas || handicapLados.mostrarMenos) && (
                   <div className="flex gap-2">
-                    {handicapLados.mostrarMas && <BotonCuota etiqueta={`Gana ${partido.a}`} valor={bHandicapA.valor} valorBase={bHandicapA.base} boosteado={bHandicapA.boosteado} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.a)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.a, handicapVivo.cuotaA, `Gana ${partido.a}`)} />}
-                    {handicapLados.mostrarMenos && <BotonCuota etiqueta={`Gana ${partido.b}`} valor={bHandicapB.valor} valorBase={bHandicapB.base} boosteado={bHandicapB.boosteado} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.b)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.b, handicapVivo.cuotaB, `Gana ${partido.b}`)} />}
+                    {handicapLados.mostrarMas && <BotonCuota etiqueta={`Gana ${partido.a}`} valor={bHandicapA.valor} valorBase={bHandicapA.base} boosteado={bHandicapA.boosteado} locked={bHandicapA.locked} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.a)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.a, handicapVivo.cuotaA, `Gana ${partido.a}`)} />}
+                    {handicapLados.mostrarMenos && <BotonCuota etiqueta={`Gana ${partido.b}`} valor={bHandicapB.valor} valorBase={bHandicapB.base} boosteado={bHandicapB.boosteado} locked={bHandicapB.locked} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.b)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.b, handicapVivo.cuotaB, `Gana ${partido.b}`)} />}
                   </div>
                 )}
               </div>
@@ -1956,8 +2008,8 @@ export default function CasaApuestasPingpong() {
                   </div>
                   {puntosAVivo && (variacionA.mostrarMas || variacionA.mostrarMenos) && (
                     <div className="flex gap-2 mt-1">
-                      {variacionA.mostrarMas && <BotonCuota etiqueta="Más de" sub={`${lineaAClamp}`} valor={bPuntosAMas.valor} valorBase={bPuntosAMas.base} boosteado={bPuntosAMas.boosteado} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Más", puntosAVivo.cuotaMas, `${partido.a} más de ${lineaAClamp}`)} />}
-                      {variacionA.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaAClamp}`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}`)} />}
+                      {variacionA.mostrarMas && <BotonCuota etiqueta="Más de" sub={`${lineaAClamp}`} valor={bPuntosAMas.valor} valorBase={bPuntosAMas.base} boosteado={bPuntosAMas.boosteado} locked={bPuntosAMas.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Más", puntosAVivo.cuotaMas, `${partido.a} más de ${lineaAClamp}`)} />}
+                      {variacionA.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaAClamp}`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} locked={bPuntosAMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}`)} />}
                     </div>
                   )}
                 </div>
@@ -1970,8 +2022,8 @@ export default function CasaApuestasPingpong() {
                   </div>
                   {puntosBVivo && (variacionB.mostrarMas || variacionB.mostrarMenos) && (
                     <div className="flex gap-2 mt-1">
-                      {variacionB.mostrarMas && <BotonCuota etiqueta="Más de" sub={`${lineaBClamp}`} valor={bPuntosBMas.valor} valorBase={bPuntosBMas.base} boosteado={bPuntosBMas.boosteado} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Más", puntosBVivo.cuotaMas, `${partido.b} más de ${lineaBClamp}`)} />}
-                      {variacionB.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaBClamp}`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}`)} />}
+                      {variacionB.mostrarMas && <BotonCuota etiqueta="Más de" sub={`${lineaBClamp}`} valor={bPuntosBMas.valor} valorBase={bPuntosBMas.base} boosteado={bPuntosBMas.boosteado} locked={bPuntosBMas.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Más", puntosBVivo.cuotaMas, `${partido.b} más de ${lineaBClamp}`)} />}
+                      {variacionB.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaBClamp}`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} locked={bPuntosBMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}`)} />}
                     </div>
                   )}
                 </div>
@@ -1980,27 +2032,35 @@ export default function CasaApuestasPingpong() {
 
             <Panel icon={Trophy} titulo="Cómo termina el partido">
               <div className="flex gap-2">
-                <BotonCuota etiqueta="Parciales (rival ≤2)" valor={bComoParciales.valor} valorBase={bComoParciales.base} boosteado={bComoParciales.boosteado} activo={!!estaEnSlip("Cómo termina", "parciales")} onClick={() => manejarClicCuota("Cómo termina", "parciales", mercados.comoTermina.parciales, "Parciales")} />
-                <BotonCuota etiqueta="Normal (3-19)" valor={bComoNormal.valor} valorBase={bComoNormal.base} boosteado={bComoNormal.boosteado} activo={!!estaEnSlip("Cómo termina", "normal")} onClick={() => manejarClicCuota("Cómo termina", "normal", mercados.comoTermina.normal, "Normal")} />
-                <BotonCuota etiqueta="Ajustado (deuce)" valor={bComoAjustado.valor} valorBase={bComoAjustado.base} boosteado={bComoAjustado.boosteado} activo={!!estaEnSlip("Cómo termina", "ajustado")} onClick={() => manejarClicCuota("Cómo termina", "ajustado", mercados.comoTermina.ajustado, "Ajustado")} />
+                <BotonCuota etiqueta="Parciales (rival ≤2)" valor={bComoParciales.valor} valorBase={bComoParciales.base} boosteado={bComoParciales.boosteado} locked={bComoParciales.locked} activo={!!estaEnSlip("Cómo termina", "parciales")} onClick={() => manejarClicCuota("Cómo termina", "parciales", mercados.comoTermina.parciales, "Parciales")} />
+                <BotonCuota etiqueta="Normal (3-19)" valor={bComoNormal.valor} valorBase={bComoNormal.base} boosteado={bComoNormal.boosteado} locked={bComoNormal.locked} activo={!!estaEnSlip("Cómo termina", "normal")} onClick={() => manejarClicCuota("Cómo termina", "normal", mercados.comoTermina.normal, "Normal")} />
+                <BotonCuota etiqueta="Ajustado (deuce)" valor={bComoAjustado.valor} valorBase={bComoAjustado.base} boosteado={bComoAjustado.boosteado} locked={bComoAjustado.locked} activo={!!estaEnSlip("Cómo termina", "ajustado")} onClick={() => manejarClicCuota("Cómo termina", "ajustado", mercados.comoTermina.ajustado, "Ajustado")} />
               </div>
+              <p className="text-[10px] c-text-2 mt-1">Parciales: 7-0, 9-1, 11-2 o que el rival no pase de 2 (ej. 21-2). Normal: Terminar a 21 con el rival haciendo entre 3 y 19. Ajustado: 22-20, 23-21...</p>
             </Panel>
 
             {partido.apuestas.length > 0 && (
               <Panel icon={Ticket} titulo={`Apuestas de esta mesa (${partido.apuestas.length})`}>
                 <div className="space-y-1">
                   {partido.apuestas.map((ap) => (
-                    <div key={ap.id} onClick={() => setDetalleApuestaVisible(ap)} className="flex justify-between text-xs border-b c-bd-2 pb-1 c-text-3 cursor-pointer hover:bg-black/5 active:scale-[0.98] transition-all p-1.5 -mx-1.5 rounded-md">
-                      <span className="flex items-center gap-1.5 truncate pr-2">
+                    <div key={ap.id} className="flex items-center justify-between text-xs border-b c-bd-2 pb-1 c-text-3 hover:bg-black/5 transition-all p-1.5 -mx-1.5 rounded-md">
+                      <div onClick={() => setDetalleApuestaVisible(ap)} className="flex-1 flex items-center gap-1.5 min-w-0 cursor-pointer">
                         <Avatar name={ap.bettor} size={16} />
                         <span className="font-semibold">{ap.bettor}</span>
                         <span className="truncate opacity-80">· {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
-                      </span>
-                      <span className="font-mono font-bold c-text-orange shrink-0">{ap.stake.toFixed(2)} × {ap.cuota.toFixed(2)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold c-text-orange shrink-0">{ap.stake.toFixed(2)} × {ap.cuota.toFixed(2)}</span>
+                        {!modoEspectador && (
+                           <button onClick={() => anularApuesta(ap.id)} className="c-text-red2 hover:c-bg-red-soft p-1 rounded transition-colors" title="Anular apuesta">
+                              <Trash2 size={14} />
+                           </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
-                <div className="text-[10px] c-text-4 text-center mt-2">Pincha en cualquier apuesta para ver el detalle y lo que necesita para ganar.</div>
+                <div className="text-[10px] c-text-4 text-center mt-2">Pincha en el texto de cualquier apuesta para ver el detalle de la papeleta.</div>
               </Panel>
             )}
 
@@ -2011,7 +2071,7 @@ export default function CasaApuestasPingpong() {
                   <span className="c-text-2">–</span>
                   <input inputMode="numeric" placeholder={partido.b} value={marcador.b} onChange={(e) => setMarcador({ ...marcador, b: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
                 </div>
-                <button onClick={registrarResultado} className="w-full mt-2 rounded-lg c-bg-green c-text-green-dark font-bold py-2.5 active:scale-95 transition-transform">
+                <button onClick={iniciarCierrePartido} className="w-full mt-2 rounded-lg c-bg-green c-text-green-dark font-bold py-2.5 active:scale-95 transition-transform">
                   Cerrar mesa y liquidar apuestas
                 </button>
               </Panel>
@@ -2068,8 +2128,10 @@ export default function CasaApuestasPingpong() {
                         const est = estadisticasApostantes[n] || { total: 0, aciertos: 0 };
                         const alturaOrden = idx === 1 ? "h-20" : idx === 0 ? "h-14" : "h-10";
                         const medalla = idx === 1 ? "🥇" : idx === 0 ? "🥈" : "🥉";
+                        const vetado = estado.vetados?.includes(n);
                         return (
-                          <div key={n} className="flex flex-col items-center gap-1 w-16">
+                          <div key={n} className="flex flex-col items-center gap-1 w-16 relative">
+                            {vetado && <div className="absolute top-0 right-0 c-text-red2"><Ban size={14} /></div>}
                             <Avatar name={n} size={26} />
                             <div className="text-[10px] c-text-1 font-semibold truncate w-full text-center">{n}</div>
                             <div className={`w-full ${alturaOrden} rounded-t-md c-grad-podio border c-bd-2b flex flex-col items-center justify-end pb-1`}>
@@ -2077,6 +2139,9 @@ export default function CasaApuestasPingpong() {
                               <span className="text-[10px] font-mono font-bold c-text-orange">{saldo.toFixed(0)}</span>
                             </div>
                             {est.total > 0 && <div className="text-[9px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</div>}
+                            {!modoEspectador && (
+                               <button onClick={() => toggleVeto(n)} className="text-[8px] uppercase underline mt-1 c-text-3">{vetado ? "Quitar Veto" : "Vetar"}</button>
+                            )}
                           </div>
                         );
                       })}
@@ -2084,12 +2149,23 @@ export default function CasaApuestasPingpong() {
                   )}
                   {resto.map(([n, saldo], i) => {
                     const est = estadisticasApostantes[n] || { total: 0, aciertos: 0 };
+                    const vetado = estado.vetados?.includes(n);
                     return (
-                      <div key={n} className="flex justify-between items-center text-sm px-1">
-                        <span className="flex items-center gap-2 c-text-3"><span className="text-xs c-text-2 w-4">{i + 4}</span><Avatar name={n} size={20} />{n}</span>
+                      <div key={n} className="flex justify-between items-center text-sm px-1 py-1">
+                        <span className="flex items-center gap-2 c-text-3">
+                           <span className="text-xs c-text-2 w-4">{i + 4}</span>
+                           <div className="relative">
+                              <Avatar name={n} size={20} />
+                              {vetado && <div className="absolute -top-1 -right-1 c-text-red2 c-bg-white rounded-full"><Ban size={10} /></div>}
+                           </div>
+                           {n}
+                        </span>
                         <span className="flex items-center gap-2">
                           {est.total > 0 && <span className="text-[10px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</span>}
                           <span className="font-mono font-bold c-text-1">{saldo.toFixed(2)}</span>
+                          {!modoEspectador && (
+                             <button onClick={() => toggleVeto(n)} className="ml-1 c-text-2 hover:c-text-red2"><Ban size={14} /></button>
+                          )}
                         </span>
                       </div>
                     );
@@ -2097,6 +2173,19 @@ export default function CasaApuestasPingpong() {
                 </div>
               )}
             </Panel>
+
+            {(rankingEstilo.reyParciales || rankingEstilo.reyDeuce) && (
+              <Panel icon={Trophy} titulo="🏅 Estilos de la temporada">
+                <div className="space-y-1.5 text-sm">
+                  {rankingEstilo.reyParciales && (
+                    <div className="flex justify-between"><span className="c-text-2">🥊 Rey de los parciales</span><span className="font-bold c-text-1">{rankingEstilo.reyParciales[0]} ({rankingEstilo.reyParciales[1].parciales})</span></div>
+                  )}
+                  {rankingEstilo.reyDeuce && (
+                    <div className="flex justify-between"><span className="c-text-2">😅 Rey del deuce</span><span className="font-bold c-text-1">{rankingEstilo.reyDeuce[0]} ({rankingEstilo.reyDeuce[1].deuceGanados}/{rankingEstilo.reyDeuce[1].deuceJugados})</span></div>
+                  )}
+                </div>
+              </Panel>
+            )}
 
             {!modoEspectador && (
               <Panel icon={Swords} titulo="Margen de la casa">
@@ -2342,16 +2431,21 @@ export default function CasaApuestasPingpong() {
             </div>
             <input
               inputMode="decimal" value={editarCuotaInput} onChange={(e) => setEditarCuotaInput(e.target.value)}
-              placeholder={editarCuotaObjetivo.valorBase.toFixed(2)} autoFocus
-              className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-lg font-bold text-center c-text-1"
+              placeholder={editarCuotaObjetivo.valorBase.toFixed(2)} autoFocus disabled={editarCuotaObjetivo.isLocked}
+              className={`w-full rounded-lg border c-bd-1 p-2 text-lg font-bold text-center c-text-1 ${editarCuotaObjetivo.isLocked ? "c-bg-app opacity-50" : "c-bg-white"}`}
             />
             {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
             <div className="flex gap-2">
-              <button onClick={guardarCuotaEditada} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm">Guardar</button>
+              <button onClick={guardarCuotaEditada} disabled={editarCuotaObjetivo.isLocked} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm disabled:opacity-50">Guardar</button>
               {boostDe(partido, editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion) && (
                 <button onClick={quitarCuotaEditada} className="flex-1 rounded-lg border c-bd-1 c-text-2 font-bold py-2 text-sm">Restaurar</button>
               )}
             </div>
+            {!editarCuotaObjetivo.isLocked && (
+               <button onClick={bloquearCuota} className="w-full flex items-center justify-center gap-1 rounded-lg c-bg-red-soft c-text-red2 border c-bd-red-40 font-bold py-2 text-sm mt-2">
+                 <Lock size={14} /> Bloquear Cuota
+               </button>
+            )}
           </div>
         </div>
       )}
@@ -2380,6 +2474,40 @@ export default function CasaApuestasPingpong() {
             {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
             <button onClick={crearMercadoCustom} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
               Publicar mercado en mesa
+            </button>
+          </div>
+        </div>
+      )}
+
+      {resolviendoCustoms && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setResolviendoCustoms(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1 c-maxh-80vh overflow-y-auto">
+            <div className="flex justify-between items-center">
+              <div className="font-bold c-text-1 text-lg">Resolución Manual</div>
+              <button onClick={() => setResolviendoCustoms(null)} className="c-text-2"><X size={18} /></button>
+            </div>
+            <p className="text-sm c-text-2 border-b c-bd-2 pb-2">
+              Has metido opciones libres. Confirma qué ha pasado para liquidar las apuestas.
+            </p>
+            <div className="space-y-3">
+               {partido.mercadosCustom.map(c => {
+                  const idCustom = `${c.mercado}||${c.seleccion}`;
+                  const acertado = resolviendoCustoms.respuestas[idCustom] || false;
+                  return (
+                     <div key={idCustom} className="p-3 rounded-lg c-bg-app border c-bd-1 flex items-center justify-between gap-3">
+                        <div className="text-sm font-semibold flex-1">
+                           {c.mercado}: <span className="c-text-orange">{c.seleccion}</span>
+                        </div>
+                        <div className="flex border c-bd-2 rounded-lg overflow-hidden shrink-0 font-bold text-xs">
+                           <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: true } })} className={`px-3 py-1.5 ${acertado ? "c-bg-green c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>SÍ</button>
+                           <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: false } })} className={`px-3 py-1.5 ${!acertado ? "c-bg-red c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>NO</button>
+                        </div>
+                     </div>
+                  );
+               })}
+            </div>
+            <button onClick={() => procesarCierrePartido(resolviendoCustoms.respuestas)} className="w-full mt-3 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
+              Confirmar y Liquidar Todo
             </button>
           </div>
         </div>
