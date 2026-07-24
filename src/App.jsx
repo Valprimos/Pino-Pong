@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff } from "lucide-react";
+import './index.css'
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
