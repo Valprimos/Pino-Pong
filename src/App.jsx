@@ -1,15 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff } from "lucide-react";
 
-/* ============================================================
-   MOTOR DE CÁLCULO
-   Elo + Gran Maestro + mercados de apuestas + condiciones de juego
-   ============================================================ */
-
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
-const PENALIZACION_SOL = 60;   // puntos de rating "efectivos" que resta el sol al lado Canasta
-const FACTOR_VIENTO = 0.7;     // el viento reduce un 30% la ventaja del favorito (más caos)
+const PENALIZACION_SOL = 60;
+const FACTOR_VIENTO = 0.7;
 
 function expectedScore(rA, rB) {
   return 1 / (1 + Math.pow(10, (rB - rA) / 400));
@@ -29,7 +24,6 @@ function normCDF(x, mean, sd) {
 }
 const SD_PUNTOS = 4;
 
-// --- Modelo simple (solo se usa para reconstruir el historial de ejemplo precargado) ---
 function ratingsEfectivas(ratingA, ratingB, ladoA, ladoB, solLado, viento) {
   const penA = solLado && ladoA === solLado ? PENALIZACION_SOL : 0;
   const penB = solLado && ladoB === solLado ? PENALIZACION_SOL : 0;
@@ -51,14 +45,14 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
 
   const ganador = { A: cuota(pA, margen), B: cuota(pB, margen), pA, pB };
 
-  // "Cuánto suele anotar cada uno cuando pierde", personalizado con su propio
-  // historial (no un número genérico compartido) — hace falta tanto para el
-  // mercado de puntos como para el de hándicap.
+
+
+
   const perdedorEsperadoA = perdedorEsperadoJugador(historial, nombreA, perdedorEsperado);
   const perdedorEsperadoB = perdedorEsperadoJugador(historial, nombreB, perdedorEsperado);
 
-  // Empezamos en 3: como en pingpong se gana por mínimo 2 puntos, un umbral de "≥2"
-  // sería idéntico al mercado de Ganador (siempre se cumple si esa persona gana).
+
+
   const handicaps = [3, 6, 10].map((k) => cuotaHandicap(pA, pB, perdedorEsperadoB, perdedorEsperadoA, margen, k));
 
   const esperadoA = pA * 21 + (1 - pA) * perdedorEsperadoA;
@@ -66,16 +60,16 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
   const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
 
-  // Cómo termina el partido: 3 opciones que cubren TODOS los finales posibles.
-  // - Parciales: el rival se queda en 0, 1 o 2 puntos (tipo 7-0, 9-1, 11-2).
-  // - Normal: se llega a 21 con el rival entre 3 y 19.
-  // - Ajustado (deuce): hay que pasar de 21 y se gana por exactamente 2 (22-20, 23-21...).
-  // La probabilidad no sale solo de la teoría: se mezcla con lo que de verdad ha
-  // pasado en los partidos jugados (cuantos más partidos haya, más pesa lo real).
+
+
+
+
+
+
   const probParcialesTeo = normCDF(2.5, perdedorEsperado, SD_PUNTOS);
   const probAjustadoTeo = Math.max(0, normCDF(20.5, perdedorEsperado, SD_PUNTOS) - normCDF(19.5, perdedorEsperado, SD_PUNTOS));
   const emp = analizarComoTermina(historial || []);
-  const PESO_TEORICO = 6; // "partidos virtuales" de peso para la parte teórica
+  const PESO_TEORICO = 6;
   const probParciales = (probParcialesTeo * PESO_TEORICO + emp.nParciales) / (PESO_TEORICO + emp.total);
   const probAjustado = (probAjustadoTeo * PESO_TEORICO + emp.nAjustado) / (PESO_TEORICO + emp.total);
   const probNormal = Math.max(0.01, 1 - probParciales - probAjustado);
@@ -88,11 +82,6 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
 }
 
-// ¿Cuánto suele anotar ESTE jugador en concreto cuando pierde? No es lo mismo
-// alguien que se hunde (pierde 21-8) que alguien que siempre pelea de cerca
-// (pierde 21-19). Miramos su historial real de derrotas y lo mezclamos con la
-// estimación genérica del partido (con pocas derrotas registradas pesa más lo
-// genérico; con historial de sobra, manda lo suyo).
 function perdedorEsperadoJugador(historial, nombre, generico) {
   if (!nombre) return generico;
   const marcasAlPerder = [];
@@ -103,7 +92,7 @@ function perdedorEsperadoJugador(historial, nombre, generico) {
     if (!esA && !esB) return;
     const suMarca = esA ? p.pa : p.pb;
     const suRivalMarca = esA ? p.pb : p.pa;
-    if (suMarca > suRivalMarca) return; // solo nos interesa cuando ESTE jugador pierde
+    if (suMarca > suRivalMarca) return;
     marcasAlPerder.push(suMarca);
   });
   if (marcasAlPerder.length === 0) return generico;
@@ -112,8 +101,6 @@ function perdedorEsperadoJugador(historial, nombre, generico) {
   return (media * marcasAlPerder.length + generico * PESO) / (marcasAlPerder.length + PESO);
 }
 
-// Frecuencia real (en todo el historial 1v1) de cada final de partido, para
-// calibrar el mercado "Cómo termina" con datos reales y no solo teoría.
 function analizarComoTermina(historial) {
   let nParciales = 0, nNormal = 0, nAjustado = 0, total = 0;
   historial.forEach((p) => {
@@ -129,47 +116,31 @@ function analizarComoTermina(historial) {
   return { nParciales, nNormal, nAjustado, total };
 }
 
-// Cuota nunca por debajo de 1.01 (nunca se paga menos de 1) ni por encima de 50
-// (más allá de eso ya no tiene ningún sentido práctico mostrarlo). OJO: el suelo/techo
-// se aplican DESPUÉS de restar el margen de la casa, si no un margen alto podía colar
-// una cuota por debajo de 1.01 aunque la probabilidad fuera casi segura.
 function cuota(p, margen) {
   if (p <= 0) return 50;
   const conMargen = (1 / p) / (1 + margen);
   return Math.min(50, Math.max(1.01, conMargen));
 }
 
-/* ---------------------------------------------------------------
-   BANCA QUE SE AUTOAJUSTA (mercado de Ganador)
-   Si casi todo el dinero de la mesa se va a un lado, la cuota de ese
-   lado se acorta un poco (paga menos) y la del otro se alarga (paga
-   más), para que a la banca no le explote el riesgo si acierta el
-   lado más apostado. Hace falta cierto volumen de fichas para que el
-   ajuste se note (una apuesta suelta de 10 fichas no debería mover
-   nada); y el movimiento nunca es brutal, tiene un tope.
-   --------------------------------------------------------------- */
 const TOPE_AJUSTE_DINERO = 0.15;
 const SENSIBILIDAD_DINERO = 0.32;
-const VOLUMEN_DE_REFERENCIA = 200; // fichas en la mesa para que el ajuste llegue a su máximo peso
+const VOLUMEN_DE_REFERENCIA = 200;
 
 function ajusteBancaPorDinero(stakeA, stakeB) {
   const total = stakeA + stakeB;
   if (total <= 0) return 0;
-  const fA = stakeA / total; // fracción del dinero que ha ido al lado A
+  const fA = stakeA / total;
   const pesoVolumen = Math.min(1, total / VOLUMEN_DE_REFERENCIA);
   const bruto = (fA - 0.5) * SENSIBILIDAD_DINERO;
   return Math.max(-TOPE_AJUSTE_DINERO, Math.min(TOPE_AJUSTE_DINERO, bruto)) * pesoVolumen;
 }
 
-// Cuotas de Ganador ya con el ajuste de la banca por el dinero apostado aplicado.
 function cuotaGanadorConDinero(pA, margen, stakeA, stakeB) {
   const ajuste = ajusteBancaPorDinero(stakeA, stakeB);
   const pAAj = Math.min(0.97, Math.max(0.03, pA + ajuste));
   return { A: cuota(pAAj, margen), B: cuota(1 - pAAj, margen), ajuste };
 }
 
-// Suma cuánto se ha apostado a que gane "nombre" en esta mesa, contando también
-// las patas de combinadas que incluyan esa selección.
 function sumaStakeGanador(apuestas, nombre) {
   let total = 0;
   apuestas.forEach((ap) => {
@@ -182,8 +153,6 @@ function sumaStakeGanador(apuestas, nombre) {
   return total;
 }
 
-// --- CUOTA MEJORADA / SUPERBOOST (para CUALQUIER mercado, no solo Ganador) ---
-// Se guarda en partido.boosts como { "mercado||seleccion": valorManual }.
 function claveBoost(mercado, seleccion) {
   return `${mercado}||${seleccion}`;
 }
@@ -192,34 +161,24 @@ function boostDe(partido, mercado, seleccion) {
   return (typeof v === "number" && v >= 1.01) ? v : null;
 }
 
-// Cuotas de "gana por ≥ k puntos" para un k cualquiera (lo usa el slider de hándicap).
-// Para "A gana por ≥k" lo que importa es cómo anota B cuando pierde (su propio
-// historial, no uno genérico), y viceversa — igual que hicimos con el mercado de puntos.
 function cuotaHandicap(pA, pB, perdedorEsperadoSiPierdeB, perdedorEsperadoSiPierdeA, margen, k) {
   const probA = pA * normCDF(21 - k + 0.5, perdedorEsperadoSiPierdeB, SD_PUNTOS);
   const probB = pB * normCDF(21 - k + 0.5, perdedorEsperadoSiPierdeA, SD_PUNTOS);
   return { k, cuotaA: cuota(probA, margen), cuotaB: cuota(probB, margen) };
 }
 
-// Probabilidad de que un jugador supere una línea de puntos, respetando la regla
-// del pingpong: SI GANA, su marca final es siempre ≥21 (nunca puede quedarse corto).
-// Por eso cualquier línea por debajo de 21 se cumple automáticamente cuando gana;
-// solo hace falta calcular la probabilidad de superarla cuando PIERDE. Esto evita
-// la inconsistencia de que "hace más de 20" pague peor que "gana" (si gana, ya la
-// ha superado seguro).
 function probSuperaLinea(pWin, perdedorEsperado, linea) {
   if (linea < 21) {
     const pSiPierde = 1 - normCDF(linea, perdedorEsperado, SD_PUNTOS);
     return pWin * 1 + (1 - pWin) * pSiPierde;
   }
-  // línea >= 21: para superarla ganando hace falta que el partido llegue a deuce
-  // y siga subiendo; lo aproximamos con una normal centrada en 21.
+
+
   const pSiGana = 1 - normCDF(linea, 21, SD_PUNTOS);
   const pSiPierde = 1 - normCDF(linea, perdedorEsperado, SD_PUNTOS);
   return pWin * pSiGana + (1 - pWin) * pSiPierde;
 }
 
-// Cuotas de "más/menos de X puntos" para una línea cualquiera (la usa el slider).
 function cuotaPuntos(pWin, perdedorEsperado, margen, linea) {
   const probMas = Math.min(0.98, Math.max(0.02, probSuperaLinea(pWin, perdedorEsperado, linea)));
   return { linea, cuotaMas: cuota(probMas, margen), cuotaMenos: cuota(1 - probMas, margen) };
@@ -229,18 +188,10 @@ function cuotaPuntosDefecto(pWin, perdedorEsperado, esperado, margen) {
   return cuotaPuntos(pWin, perdedorEsperado, margen, linea);
 }
 
-// Rango "con sentido" para el slider de más/menos puntos de un jugador concreto:
-// ni tan bajo que ganar sea gratis (cuota ~1.00) ni tan alto que sea imposible.
-// Se calcula a partir de SU historial real de puntos anotados (percentiles), y si
-// no hay suficiente historial se usa un rango genérico razonable.
-// ¿Merece la pena mostrar el botón de "más de" / "menos de" para este jugador?
-// Si en TODO el rango del slider la cuota apenas se mueve (por ejemplo, un
-// favorito clarísimo que va a superar cualquier línea razonable casi seguro),
-// ese lado no aporta nada real y es mejor no ofrecerlo.
 function variacionSuficiente(pWin, perdedorEsperado, margen, rangoMin, rangoMax) {
   const enMin = cuotaPuntos(pWin, perdedorEsperado, margen, rangoMin);
   const enMax = cuotaPuntos(pWin, perdedorEsperado, margen, rangoMax);
-  const UMBRAL = 1.15; // al menos un 15% de variación entre los dos extremos
+  const UMBRAL = 1.15;
   const ratio = (a, b) => Math.max(a, b) / Math.min(a, b);
   return {
     mostrarMas: ratio(enMin.cuotaMas, enMax.cuotaMas) >= UMBRAL,
@@ -248,10 +199,6 @@ function variacionSuficiente(pWin, perdedorEsperado, margen, rangoMin, rangoMax)
   };
 }
 
-// En la posición ACTUAL del slider (no en todo el rango): si un lado ya se ha
-// quedado en una cuota casi segura (≈1.01), seguir ofreciéndolo no aporta nada
-// — por eso "más de 10" y "más de 13" no deben pagar los dos 1.01: a partir de
-// que uno se pone al suelo, ese lado deja de mostrarse y solo queda el otro.
 function ladoConSentido(cuotaMas, cuotaMenos) {
   const CASI_SEGURO = 1.02;
   const masEsSeguro = cuotaMas <= CASI_SEGURO;
@@ -274,9 +221,9 @@ function rangoPuntosSensato(historial, nombre) {
   const maxObs = Math.max(...puntos);
   let min = Math.max(3, minObs - 2);
   let max = Math.min(20, maxObs + 1);
-  // Si el jugador es muy regular (siempre gana o siempre pierde igual), su historial
-  // puede quedar muy apretado hacia un lado y la barra apenas tendría recorrido real.
-  // Forzamos una anchura mínima para que SIEMPRE haya variedad de verdad al moverla.
+
+
+
   const ANCHURA_MINIMA = 11;
   if (max - min < ANCHURA_MINIMA) {
     const centro = (max + min) / 2;
@@ -286,10 +233,6 @@ function rangoPuntosSensato(historial, nombre) {
   return { min: Math.min(min, max - 2), max: Math.max(max, min + 2) };
 }
 
-// Rango "con sentido" para el slider de hándicap: empieza en 3 (2 sería lo mismo
-// que el mercado Ganador) y sigue ampliando mientras la cuota del favorito todavía
-// no esté pegada al techo — así en un partido muy desigual se puede pedir un
-// margen bien grande, y en uno igualado el rango se queda corto (con razón).
 function rangoHandicapSensato(pA, pB, perdedorEsperadoA, perdedorEsperadoB, margen) {
   let max = 3;
   for (let k = 3; k <= 19; k++) {
@@ -301,7 +244,6 @@ function rangoHandicapSensato(pA, pB, perdedorEsperadoA, perdedorEsperadoB, marg
   return { min: 3, max: Math.max(6, max) };
 }
 
-// Se usa solo para reconstruir el historial de ejemplo precargado (modelo simple, sin analizar datos).
 function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, solLado, viento) {
   const avgA = ratingsA.reduce((s, r) => s + r, 0) / ratingsA.length;
   const avgB = ratingsB.reduce((s, r) => s + r, 0) / ratingsB.length;
@@ -312,8 +254,6 @@ function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, solLado, v
   return { deltaA: K_FACTOR * (sA - pA), deltaB: K_FACTOR * (sB - pB) };
 }
 
-// Resuelve UNA selección de apuesta (se usa igual para apuestas simples que
-// para cada pata de una combinada).
 function evaluarPata(mercado, seleccion, ctx) {
   const { ganador, pa, pb, nombreA, nombreB } = ctx;
   const margen = Math.abs(pa - pb);
@@ -340,7 +280,6 @@ function evaluarPata(mercado, seleccion, ctx) {
   return false;
 }
 
-// Extrae información estructurada de una selección para poder compararla con otras.
 function extraerInfoSeleccion(mercado, seleccion) {
   if (mercado === "Ganador") return { tipo: "ganador", jugador: seleccion };
   if (mercado.startsWith("Hándicap")) return { tipo: "handicap", k: Number(mercado.match(/(\d+)/)[1]), jugador: seleccion };
@@ -352,32 +291,26 @@ function extraerInfoSeleccion(mercado, seleccion) {
   return { tipo: "otro" };
 }
 
-// ¿Se pueden combinar estas dos selecciones en la misma cesta/combinada, o son
-// lógicamente incompatibles (contrarias)?
-// Dos selecciones NO se pueden combinar si son:
-// (a) contrarias (no pueden ser ciertas las dos a la vez), o
-// (b) una implica la otra (si una es cierta, la otra ya lo es seguro) — combinarlas
-//     no añade ningún riesgo real, solo infla la cuota de forma artificial.
 function sonContradictorias(a, b) {
   const ia = extraerInfoSeleccion(a.mercado, a.seleccion);
   const ib = extraerInfoSeleccion(b.mercado, b.seleccion);
   const esGanaOHandicap = (info) => info.tipo === "ganador" || info.tipo === "handicap";
 
-  // "Quién gana / por cuánto" del mismo partido: de jugadores distintos son
-  // contrarias (solo puede ganar uno); del mismo jugador, la más exigente ya
-  // implica a la otra (ganar por ≥10 implica ganar por ≥5, e implica ganar).
-  // Ninguna combinación de este tipo aporta nada: se bloquean todas.
+
+
+
+
   if (esGanaOHandicap(ia) && esGanaOHandicap(ib)) return true;
 
-  // Ganador/Hándicap de un jugador X + Puntos de ESE MISMO X: al ganar, su marca
-  // siempre es ≥21, así que "hace más de L" (L<21) ya queda implícito y "hace
-  // menos de L" queda directamente contradicho. Se bloquea en los dos casos.
+
+
+
   if (esGanaOHandicap(ia) && ib.tipo === "puntos" && ib.jugador === ia.jugador) return true;
   if (esGanaOHandicap(ib) && ia.tipo === "puntos" && ia.jugador === ib.jugador) return true;
 
-  // Puntos + Puntos del mismo jugador: misma dirección con distinta línea = una
-  // implica la otra (p.ej. "más de 19" ya implica "más de 18"); direcciones
-  // opuestas que no dejan hueco entre ellas = contradicción.
+
+
+
   if (ia.tipo === "puntos" && ib.tipo === "puntos" && ia.jugador === ib.jugador) {
     if (ia.seleccion === ib.seleccion) return true;
     const mas = ia.seleccion === "Más" ? ia : ib;
@@ -391,10 +324,10 @@ function sonContradictorias(a, b) {
   const ajustado = par.find((x) => x.tipo === "comoTermina" && x.opcion === "ajustado");
   const handicap3 = par.find((x) => x.tipo === "handicap" && x.k >= 3);
   if (ajustado && handicap3) return true;
-  // "Normal" significa que el rival se queda entre 3 y 19 puntos, es decir, el
-  // margen puede llegar hasta 21-3=18. Por eso solo contradice a un hándicap de
-  // 19 o más (imposible dentro de "normal"), no a partir de 12 como antes de
-  // que Parciales pasara a ser "rival ≤2" en vez de "rival ≤9".
+
+
+
+
   const normal = par.find((x) => x.tipo === "comoTermina" && x.opcion === "normal");
   const handicap19 = par.find((x) => x.tipo === "handicap" && x.k >= 19);
   if (normal && handicap19) return true;
@@ -409,25 +342,11 @@ function actualizarTitulo(gm, pendiente, esGM, ganador) {
   return { gm, pendiente: ganador };
 }
 
-/* ============================================================
-   ANÁLISIS ESTADÍSTICO A PARTIR DEL HISTORIAL REAL
-   En vez de aplicar siempre la misma penalización fija de sol/viento,
-   miramos cómo le ha ido realmente a CADA jugador en cada condición
-   (campo, sol en contra, viento) y comparamos con lo que el Elo
-   esperaba. Con pocos partidos esa comparación pesa poco ("regresión
-   a la media" mediante un pseudo-recuento): un jugador que solo ha
-   jugado 1 vez con sol y ganó no pasa a tener el 100% asegurado, el
-   efecto se atenúa hasta que hay más partidos que lo confirmen.
-   ============================================================ */
-
-// Construye, para cada jugador, la lista de partidos individuales que jugó,
-// con el lado, si el sol molestaba a SU lado, si había viento, si ganó,
-// y la probabilidad que el Elo (puro, sin ajustes) le daba en ese momento.
 function construirRegistrosPorJugador(historial) {
   const registros = {};
   historial.forEach((p) => {
     if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
-    if (!p.ladoA || !p.ladoB) return; // partidos antiguos sin datos de campo/sol: se excluyen del análisis
+    if (!p.ladoA || !p.ladoB) return;
     const [a] = p.teamA, [b] = p.teamB;
     const ratingA = p.ratingsAntes?.[a] ?? RATING_INICIAL;
     const ratingB = p.ratingsAntes?.[b] ?? RATING_INICIAL;
@@ -441,10 +360,7 @@ function construirRegistrosPorJugador(historial) {
   return registros;
 }
 
-// Media de residuos (resultado real - probabilidad Elo) en un subconjunto de partidos,
-// atenuada según cuántos partidos hay (regresión a la media con pseudoN partidos "neutros"),
-// y acotada para que ni con muchos partidos un solo factor dispare la cuota de forma extrema.
-const TOPE_EFECTO_INDIVIDUAL = 0.12; // ningún factor por sí solo mueve la probabilidad más de 12 puntos
+const TOPE_EFECTO_INDIVIDUAL = 0.12;
 function efectoContextual(registrosJugador, filtro, pseudoN) {
   if (!registrosJugador) return { efecto: 0, n: 0, victorias: 0 };
   const subset = registrosJugador.filter(filtro);
@@ -457,9 +373,7 @@ function efectoContextual(registrosJugador, filtro, pseudoN) {
   return { efecto: acotado, n, victorias };
 }
 
-// Probabilidad final de que gane el jugador A, combinando el Elo base con lo que
-// históricamente le pasa a CADA jugador en el campo / sol / viento de este partido.
-const TOPE_EFECTO_TOTAL = 0.22; // el conjunto de campo+sol+viento no puede mover más de 22 puntos
+const TOPE_EFECTO_TOTAL = 0.22;
 function calcularEfectosJugador(registros, nombre, lado, solLado, viento) {
   const regs = registros[nombre];
   const efLado = efectoContextual(regs, (r) => r.lado === lado, 6);
@@ -484,18 +398,13 @@ function probabilidadYDetalle(historialPrevio, nombreA, nombreB, ratingA, rating
   const pAdjA = Math.min(1 - EPS, Math.max(EPS, pEloBase + efA.total));
   const pAdjB = Math.min(1 - EPS, Math.max(EPS, (1 - pEloBase) + efB.total));
   let pA = pAdjA / (pAdjA + pAdjB);
-  // El cara a cara directo entre estos dos jugadores concretos es la señal más
-  // informativa que hay (más que el Elo general), así que se aplica aparte y
-  // puede pesar más que un solo factor contextual (campo/sol/viento).
+
+
+
   pA = Math.min(1 - EPS, Math.max(EPS, pA + efH2H.efecto));
   return { pA, pB: 1 - pA, detalleA: efA.detalle, detalleB: efB.detalle, h2h: efH2H };
 }
 
-// --- CARA A CARA (head-to-head) ---
-// Partidos directos entre dos jugadores concretos. A propósito NO exige datos de
-// campo/sol (a diferencia de construirRegistrosPorJugador): el cara a cara cuenta
-// también los partidos antiguos donde no anotamos el campo, porque lo relevante
-// aquí es solo quién le gana a quién, no las condiciones.
 function construirRegistrosH2H(historial) {
   const registros = {};
   historial.forEach((p) => {
@@ -515,22 +424,20 @@ function construirRegistrosH2H(historial) {
   return registros;
 }
 
-const TOPE_H2H = 0.3; // el cara a cara puede pesar más que un solo factor contextual: es la señal más directa que existe
+const TOPE_H2H = 0.3;
 function efectoH2H(registrosH2H, nombreA, nombreB) {
   const regs = registrosH2H[nombreA]?.[nombreB];
   if (!regs || regs.length === 0) return { efecto: 0, n: 0, victorias: 0 };
   const n = regs.length;
   const victorias = regs.filter((r) => r.gano).length;
   const mediaResiduo = regs.reduce((s, r) => s + ((r.gano ? 1 : 0) - r.pElo), 0) / n;
-  // pseudoN bajo (2.5): con pocos cara a cara ya empieza a pesar, porque es más
-  // informativo que una estadística general de campo/sol.
+
+
   const atenuado = mediaResiduo * (n / (n + 2.5));
   const acotado = Math.max(-TOPE_H2H, Math.min(TOPE_H2H, atenuado));
   return { efecto: acotado, n, victorias };
 }
 
-// Racha actual de un jugador: positiva = victorias seguidas, negativa = derrotas
-// seguidas, 0 = sin partidos. El historial va del más reciente al más antiguo.
 function calcularRacha(historial, nombre) {
   let racha = 0;
   let signo = null;
@@ -548,8 +455,6 @@ function calcularRacha(historial, nombre) {
   return signo ? racha : -racha;
 }
 
-// Perfil completo de un jugador: récord por campo, con sol, con viento, cara a
-// cara contra cada rival, y sus últimos partidos. Se usa para la ficha de perfil.
 function construirPerfilJugador(historial, nombre) {
   const registros = construirRegistrosPorJugador(historial);
   const regs = registros[nombre] || [];
@@ -576,12 +481,6 @@ function construirPerfilJugador(historial, nombre) {
   };
 }
 
-/* ---------------------------------------------------------------
-   "MEJOR TAHÚR DEL VERANO" — estadísticas de apostantes, no de jugadores
-   --------------------------------------------------------------- */
-
-// Recorre todo el historial y saca, por apostante: apuestas totales, aciertos,
-// y fichas netas ganadas/perdidas desde que empezó (partiendo de 500 iniciales).
 function calcularEstadisticasApostantes(historial, bettors) {
   const stats = {};
   Object.keys(bettors).forEach((n) => { stats[n] = { total: 0, aciertos: 0 }; });
@@ -595,9 +494,6 @@ function calcularEstadisticasApostantes(historial, bettors) {
   return stats;
 }
 
-// Racha actual de aciertos de un apostante (apuestas resueltas, recorriendo el
-// historial del partido más reciente al más antiguo). Se corta en la primera
-// apuesta perdida que nos encontremos yendo hacia atrás en el tiempo.
 function calcularRachaApuestas(historial, bettor) {
   let racha = 0;
   for (const p of historial) {
@@ -610,17 +506,12 @@ function calcularRachaApuestas(historial, bettor) {
   return racha;
 }
 
-// Con 3+ aciertos seguidos, un empujoncito a la cuota de la próxima apuesta;
-// con 5+, un poco más. Tope en +15% para que siga siendo un detalle, no un regalo.
 function bonusPorRachaApostante(racha) {
   if (racha >= 5) return 1.15;
   if (racha >= 3) return 1.08;
   return 1;
 }
 
-/* ---------------------------------------------------------------
-   TITULAR AUTOMÁTICO
-   --------------------------------------------------------------- */
 function generarTitular(p, coronacion, rachaRota) {
   const ganoA = p.pa > p.pb;
   const ganador = ganoA ? p.aLabel : p.bLabel;
@@ -647,9 +538,6 @@ function generarTitular(p, coronacion, rachaRota) {
   return base + ".";
 }
 
-/* ---------------------------------------------------------------
-   RANKING POR ESTILO
-   --------------------------------------------------------------- */
 function calcularRankingEstilo(historial) {
   const porJugador = {};
   const ensure = (n) => { if (!porJugador[n]) porJugador[n] = { parciales: 0, deuceJugados: 0, deuceGanados: 0 }; };
@@ -677,9 +565,6 @@ function calcularRankingEstilo(historial) {
   };
 }
 
-/* ---------------------------------------------------------------
-   EXPORTAR HISTORIAL A CSV
-   --------------------------------------------------------------- */
 function historialACSV(historial) {
   const filas = [["Fecha", "Hora", "JugadorA", "JugadorB", "PuntosA", "PuntosB", "Ganador", "CampoA", "CampoB", "Sol", "Viento", "GranMaestria"]];
   historial.forEach((p) => {
@@ -701,10 +586,6 @@ function descargarCSV(contenido, nombreArchivo) {
   URL.revokeObjectURL(url);
 }
 
-/* ============================================================
-   ESTADO INICIAL / PERSISTENCIA
-   ============================================================ */
-
 const STORAGE_KEY = "casa-pingpong-estado-v1";
 
 const ESTADO_DEFECTO = {
@@ -724,16 +605,6 @@ async function guardarEstado(estado) {
   catch (e) { console.error("Error guardando estado", e); }
 }
 
-/* ============================================================
-   HISTORIAL REAL PRECARGADO
-   (Jorge era el Gran Maestro inicial; en el partido marcado con
-   forzarPendiente se aplica un ajuste manual porque Javier ya
-   llegaba como candidato aunque no teníamos ese partido registrado.
-   Se ha eliminado un 22-20 de Javier a Nicolás que estaba duplicado,
-   y también un 22-20 de Javier a Nicolás repetido en la última tanda.
-   "solLado" indica a qué lado molesta el sol ese partido (puede ser
-   Canasta o Columpios, no siempre el mismo).)
-   ============================================================ */
 const HISTORIAL_REAL = [
   { teamA: ["Jorge"], teamB: ["Javier"], pa: 16, pb: 21, esGM: true },
   { teamA: ["Nicolás"], teamB: ["Javier"], pa: 5, pb: 21, esGM: false },
@@ -767,7 +638,7 @@ const HISTORIAL_REAL = [
     hora: "20:10", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
   { teamA: ["Daniel", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 17, pb: 21, esGM: false,
     hora: "20:20", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
-  // --- nueva tanda ---
+
   { teamA: ["Alberto"], teamB: ["Álvaro"], pa: 19, pb: 21, esGM: false,
     hora: "14:00", ladoA: "Canasta", ladoB: "Columpios", solLado: null, viento: true },
   { teamA: ["Pedro"], teamB: ["Álvaro"], pa: 18, pb: 21, esGM: false,
@@ -790,7 +661,7 @@ const HISTORIAL_REAL = [
     hora: "19:20", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
   { teamA: ["Javier"], teamB: ["Nicolás"], pa: 21, pb: 12, esGM: true,
     hora: "19:20", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
-  // --- nueva tanda (21-22 julio) ---
+
   { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 16, esGM: false,
     hora: "18:30", ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", viento: false },
   { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 19, esGM: false,
@@ -906,14 +777,6 @@ function construirEstadoDesdeHistorialReal() {
   });
   return { jugadores, gm, pendiente, margen: 0.08, bettors: {}, partidoAbierto: null, historial: historial.reverse() };
 }
-
-/* ============================================================
-   TOKENS DE DISEÑO (tema claro — pensado para no depender del modo oscuro de Claude)
-   bg #F3F5F8 · superficie #FFFFFF · borde #E2E6EC
-   acento (botones/números grandes) #FF5A1F · acento en texto pequeño #C2410C
-   acierto #16A34A (texto pequeño #15803D) · fallo #DC2626 (texto pequeño #C81E1E/#B91C1C)
-   oro (texto) #7A5D18 · texto primario #14181F · secundario #5B6472 (todo verificado ≥4.5:1)
-   ============================================================ */
 
 function colorFromName(name) {
   let hash = 0;
@@ -1200,10 +1063,6 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
   );
 }
 
-/* ============================================================
-   APP PRINCIPAL
-   ============================================================ */
-
 export default function CasaApuestasPingpong() {
   const [estado, setEstado] = useState(null);
   const [cargando, setCargando] = useState(true);
@@ -1219,7 +1078,7 @@ export default function CasaApuestasPingpong() {
   const [slip, setSlip] = useState([]);
   const [slipOpen, setSlipOpen] = useState(false);
   const [bettorSlip, setBettorSlip] = useState("");
-  const [modoSlip, setModoSlip] = useState("simples"); // "simples" | "combinada"
+  const [modoSlip, setModoSlip] = useState("simples");
   const [stakeCombinada, setStakeCombinada] = useState("50");
   const [handicapK, setHandicapK] = useState(5);
   const [mostrarFormHistorico, setMostrarFormHistorico] = useState(false);
@@ -1326,7 +1185,7 @@ export default function CasaApuestasPingpong() {
     const csv = historialACSV(estado.historial);
     // La descarga automática puede estar bloqueada dentro del artefacto (entorno
     // aislado), así que la intentamos mostrando el texto para copiar en cualquier caso.
-    try { descargarCSV(csv, "pinamax_historial.csv"); } catch (e) { /* seguimos con el modal igualmente */ }
+    try { descargarCSV(csv, "pinamax_historial.csv"); } catch (e) {  }
     setCsvCopiado(false);
     setCsvVisible(csv);
   }
@@ -1401,7 +1260,7 @@ export default function CasaApuestasPingpong() {
 
   // Punto único por el que pasa cualquier toque a una cuota: si estamos en modo
   // "editar cuotas" (solo disponible en modo boss) abre el editor de esa
-  // selección; si no, funciona como apuesta normal.
+
   function manejarClicCuota(mercado, seleccion, valorBase, etiqueta) {
     if (modoEditarCuotas && !modoEspectador) {
       abrirEditorCuota(mercado, seleccion, valorBase, etiqueta);
@@ -1516,8 +1375,8 @@ export default function CasaApuestasPingpong() {
       gm, pendiente,
       historial: [partidoCerrado, ...estado.historial],
     });
-    // Deja elegidos los mismos jugadores/lado/condiciones para meter varios seguidos rápido;
-    // solo se limpia el marcador y la hora.
+
+
     setHistPa(""); setHistPb(""); setHistHora(""); setHistEsGM(false);
   }
 
@@ -1610,8 +1469,8 @@ export default function CasaApuestasPingpong() {
   const variacionA0 = puntosAVivo ? ladoConSentido(puntosAVivo.cuotaMas, puntosAVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const variacionB0 = puntosBVivo ? ladoConSentido(puntosBVivo.cuotaMas, puntosBVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const handicapLados0 = handicapVivo ? ladoConSentido(handicapVivo.cuotaA, handicapVivo.cuotaB) : { mostrarMas: true, mostrarMenos: true };
-  // En modo edición de cuotas se enseñan SIEMPRE los dos lados, aunque uno esté
-  // oculto para apostar normalmente — si no, no se podría ajustar a mano.
+
+
   const variacionA = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : variacionA0;
   const variacionB = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : variacionB0;
   const handicapLados = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : handicapLados0;
@@ -1660,9 +1519,6 @@ export default function CasaApuestasPingpong() {
         input::placeholder { color: #6B7280; }
         input[type="checkbox"] { accent-color: #FF5A1F; width: 15px; height: 15px; }
 
-        /* --- Clases de color "a mano": este entorno no compila clases arbitrarias
-             de Tailwind tipo bg-[#F3F5F8], así que todo el color se define aquí
-             como CSS normal para garantizar que se pinte siempre. --- */
         .c-bg-app { background-color: #F3F5F8 !important; }
         .c-bg-white { background-color: #FFFFFF !important; }
         .c-bg-white-95 { background-color: rgba(255,255,255,0.95) !important; }
@@ -1731,7 +1587,6 @@ export default function CasaApuestasPingpong() {
 
       {celebracion && <Confeti nombre={celebracion.nombre} tipo={celebracion.tipo} onFin={() => setCelebracion(null)} />}
 
-      {/* Cabecera */}
       <div className="sticky top-0 z-30 c-bg-white-95 backdrop-blur px-4 pt-4 pb-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1774,7 +1629,6 @@ export default function CasaApuestasPingpong() {
           </div>
         )}
 
-        {/* ---------------- TAB PARTIDO / APUESTAS ---------------- */}
         {tab === "partido" && !partido && modoEspectador && (
           <Panel icon={Eye} titulo="Modo espectador">
             <p className="text-sm c-text-2">No hay ningún partido en juego ahora mismo. Vuelve al modo boss (arriba a la derecha) si quieres montar uno.</p>
@@ -2018,7 +1872,6 @@ export default function CasaApuestasPingpong() {
           </div>
         )}
 
-        {/* ---------------- TAB JUGADORES ---------------- */}
         {tab === "jugadores" && (
           <div className="space-y-3">
             {!modoEspectador && (
@@ -2170,7 +2023,6 @@ export default function CasaApuestasPingpong() {
           </div>
         )}
 
-        {/* ---------------- TAB HISTORIAL ---------------- */}
         {tab === "historial" && (
           <div className="space-y-3">
             {estado.historial.length > 0 && (
@@ -2218,7 +2070,6 @@ export default function CasaApuestasPingpong() {
         )}
       </div>
 
-      {/* FAB cesta de apuestas */}
       {slip.length > 0 && !slipOpen && (
         <button
           onClick={() => setSlipOpen(true)}
@@ -2229,7 +2080,6 @@ export default function CasaApuestasPingpong() {
         </button>
       )}
 
-      {/* Navegación fija abajo */}
       <div className="fixed bottom-0 inset-x-0 z-40 c-bg-white-95 backdrop-blur border-t c-bd-mesa-40 flex justify-around py-2 px-2">
         {TABS.map((t) => {
           const activo = tab === t.id;
@@ -2244,7 +2094,6 @@ export default function CasaApuestasPingpong() {
         })}
       </div>
 
-      {/* Drawer cesta de apuestas */}
       {slipOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50" onClick={() => setSlipOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl p-4 w-full max-w-md space-y-3 border-t c-bd-1 c-maxh-80vh overflow-y-auto c-anim-fadein-2">
@@ -2313,7 +2162,6 @@ export default function CasaApuestasPingpong() {
         </div>
       )}
 
-      {/* Ticket tras apostar */}
       {ticketVisible && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-3" onClick={() => setTicketVisible(null)}>
           <div onClick={(e) => e.stopPropagation()}>
@@ -2408,4 +2256,3 @@ export default function CasaApuestasPingpong() {
     </div>
   );
 }
-
