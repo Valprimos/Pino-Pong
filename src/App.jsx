@@ -142,21 +142,6 @@ function perdedorEsperadoJugador(historial, nombre, generico) {
   return (media * marcasAlPerder.length + generico * PESO) / (marcasAlPerder.length + PESO);
 }
 
-function analizarComoTermina(historial) {
-  let nParciales = 0, nNormal = 0, nAjustado = 0, total = 0;
-  historial.forEach((p) => {
-    if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
-    const ganoA = p.pa > p.pb;
-    const winnerScore = ganoA ? p.pa : p.pb;
-    const loserScore = ganoA ? p.pb : p.pa;
-    total++;
-    if (isParcial(p.pa, p.pb)) nParciales++;
-    else if (winnerScore > 21) nAjustado++;
-    else nNormal++;
-  });
-  return { nParciales, nNormal, nAjustado, total };
-}
-
 const TOPE_AJUSTE_DINERO = 0.15;
 const SENSIBILIDAD_DINERO = 0.32;
 const VOLUMEN_DE_REFERENCIA = 200;
@@ -316,8 +301,44 @@ function evaluarPata(mercado, seleccion, ctx, customResults = {}) {
   return false;
 }
 
-function sonContradictorias(a, b) {
-  if (a.mercado === "Ganador" && b.mercado === "Ganador" && a.seleccion !== b.seleccion) return true;
+// MOTOR MATEMÁTICO: Evaluador lógico de contradicciones e implicaciones (SGP)
+function sonContradictorias(a, b, partido) {
+  if (!partido) return false;
+
+  // Los mercados personalizados creados por el Boss escapan de la matemática estricta
+  const isCustom = (m) => !["Ganador", "Resultado Exacto Partido", "Cómo termina"].includes(m) && !m.startsWith("Puntos Exactos") && !m.startsWith("Hándicap") && !m.startsWith("Puntos ");
+  if (isCustom(a.mercado) || isCustom(b.mercado)) {
+      if (a.mercado === b.mercado && a.seleccion !== b.seleccion) return true;
+      return false;
+  }
+
+  // Simulamos TODOS los resultados posibles de pingpong para ver si chocan
+  const allResultados = [];
+  for(let pa=0; pa<=35; pa++){
+    for(let pb=0; pb<=35; pb++){
+       if(isValidScore(pa,pb)) allResultados.push({pa, pb});
+    }
+  }
+
+  let vecesGanaA = 0, vecesGanaB = 0, vecesGananAmbas = 0;
+  
+  for (const r of allResultados) {
+    const ctx = { ganador: r.pa > r.pb ? partido.a : partido.b, pa: r.pa, pb: r.pb, nombreA: partido.a, nombreB: partido.b };
+    const w1 = evaluarPata(a.mercado, a.seleccion, ctx, {});
+    const w2 = evaluarPata(b.mercado, b.seleccion, ctx, {});
+    
+    if (w1) vecesGanaA++;
+    if (w2) vecesGanaB++;
+    if (w1 && w2) vecesGananAmbas++;
+  }
+
+  // 1. Contradicción pura: Nunca se dan juntas en ningún universo posible.
+  if (vecesGananAmbas === 0) return true; 
+
+  // 2. Redundancia / Implicación: Matemática pura. Si un resultado ya obliga al otro, es redundante.
+  if (vecesGananAmbas === vecesGanaA || vecesGananAmbas === vecesGanaB) return true;
+
+  // Si pasa ambos filtros, significa que se solapan pero ninguna obliga a la otra. ¡Se pueden combinar!
   return false;
 }
 
@@ -1097,7 +1118,7 @@ export default function CasaApuestasPingpong() {
       let nuevaCuota = s.cuota;
       let boostEncontrado = boostDe(partidoActual, s.mercado, s.seleccion);
       
-      if (boostEncontrado === "LOCKED") return s; // Dejamos la cuota igual, al confirmar avisará
+      if (boostEncontrado === "LOCKED") return s; 
       
       if (boostEncontrado) {
         nuevaCuota = boostEncontrado;
@@ -1304,9 +1325,10 @@ export default function CasaApuestasPingpong() {
     if (existente) { setSlip(slip.filter((s) => s.id !== existente.id)); return; }
     
     const nuevaSel = { mercado, seleccion };
-    const conflicto = slip.find((s) => sonContradictorias(s, nuevaSel));
+    const conflicto = slip.find((s) => sonContradictorias(s, nuevaSel, partido));
+    
     if (conflicto) {
-      setError(`"${seleccion}" es contraria a "${conflicto.seleccion}".`);
+      setError(`"${seleccion}" (en ${mercado}) entra en conflicto lógico con "${conflicto.seleccion}" (en ${conflicto.mercado}). Son apuestas contradictorias o redundantes.`);
       return;
     }
 
@@ -1327,7 +1349,6 @@ export default function CasaApuestasPingpong() {
     if (!nombre) { setError("Pon el nombre de quién apuesta."); return; }
     if (estado.vetados?.includes(nombre)) { setError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
     
-    // Check locked cuotas in slip
     const hasLocked = slip.some(s => boostDe(partido, s.mercado, s.seleccion) === "LOCKED");
     if (hasLocked) { setError("Una de las cuotas de tu cesta acaba de ser bloqueada por la casa. Quítala para continuar."); return; }
 
