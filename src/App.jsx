@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff } from "lucide-react";
+import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, HelpCircle } from "lucide-react";
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
@@ -68,7 +68,19 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
     ajustado: cuota(probAjustado, margen),
   };
 
-  return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
+  // Cuotas estimadas para resultados exactos comunes en ping pong (ej: 21-0, 21-12, 21-19, etc.)
+  const resultadosExactos = [
+    { marcador: `21-0`, p: pA * 0.05 },
+    { marcador: `21-10`, p: pA * 0.12 },
+    { marcador: `21-15`, p: pA * 0.20 },
+    { marcador: `21-19`, p: pA * 0.15 },
+    { marcador: `0-21`, p: pB * 0.05 },
+    { marcador: `10-21`, p: pB * 0.12 },
+    { marcador: `15-21`, p: pB * 0.20 },
+    { marcador: `19-21`, p: pB * 0.15 },
+  ].map(res => ({ marcador: res.marcador, cuota: cuota(Math.max(0.01, res.p), margen) }));
+
+  return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, resultadosExactos, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
 }
 
 function perdedorEsperadoJugador(historial, nombre, generico) {
@@ -108,7 +120,7 @@ function analizarComoTermina(historial) {
 function cuota(p, margen) {
   if (p <= 0) return 50;
   const conMargen = (1 / p) / (1 + margen);
-  return Math.min(50, Math.max(1.01, conMargen));
+  return Number(Math.min(50, Math.max(1.01, conMargen)).toFixed(2));
 }
 
 const TOPE_AJUSTE_DINERO = 0.15;
@@ -175,17 +187,6 @@ function cuotaPuntosDefecto(pWin, perdedorEsperado, esperado, margen) {
   return cuotaPuntos(pWin, perdedorEsperado, margen, linea);
 }
 
-function variacionSuficiente(pWin, perdedorEsperado, margen, rangoMin, rangoMax) {
-  const enMin = cuotaPuntos(pWin, perdedorEsperado, margen, rangoMin);
-  const enMax = cuotaPuntos(pWin, perdedorEsperado, margen, rangoMax);
-  const UMBRAL = 1.15;
-  const ratio = (a, b) => Math.max(a, b) / Math.min(a, b);
-  return {
-    mostrarMas: ratio(enMin.cuotaMas, enMax.cuotaMas) >= UMBRAL,
-    mostrarMenos: ratio(enMin.cuotaMenos, enMax.cuotaMenos) >= UMBRAL,
-  };
-}
-
 function ladoConSentido(cuotaMas, cuotaMenos) {
   const CASI_SEGURO = 1.02;
   const masEsSeguro = cuotaMas <= CASI_SEGURO;
@@ -242,6 +243,7 @@ function evaluarPata(mercado, seleccion, ctx) {
   const { ganador, pa, pb, nombreA, nombreB } = ctx;
   const margen = Math.abs(pa - pb);
   if (mercado === "Ganador") return seleccion === ganador;
+  if (mercado === "Resultado Exacto") return seleccion === `${pa}-${pb}` || seleccion === `${pb}-${pa}`;
   if (mercado.startsWith("Hándicap")) {
     const k = Number(mercado.match(/(\d+)/)[1]);
     return seleccion === ganador && margen >= k;
@@ -265,7 +267,7 @@ function evaluarPata(mercado, seleccion, ctx) {
 }
 
 function extraerInfoSeleccion(mercado, seleccion) {
-  if (mercado === "Ganador") return { tipo: "ganador", jugador: seleccion };
+  if (mercado === "Ganador" || mercado === "Resultado Exacto") return { tipo: "ganador", jugador: seleccion };
   if (mercado.startsWith("Hándicap")) return { tipo: "handicap", k: Number(mercado.match(/(\d+)/)[1]), jugador: seleccion };
   if (mercado.startsWith("Puntos")) {
     const m = mercado.match(/^Puntos (.+) ([\d.]+)$/);
@@ -281,7 +283,6 @@ function sonContradictorias(a, b) {
   const esGanaOHandicap = (info) => info.tipo === "ganador" || info.tipo === "handicap";
 
   if (esGanaOHandicap(ia) && esGanaOHandicap(ib)) return true;
-
   if (esGanaOHandicap(ia) && ib.tipo === "puntos" && ib.jugador === ia.jugador) return true;
   if (esGanaOHandicap(ib) && ia.tipo === "puntos" && ia.jugador === ib.jugador) return true;
 
@@ -293,16 +294,6 @@ function sonContradictorias(a, b) {
   }
 
   if (ia.tipo === "comoTermina" && ib.tipo === "comoTermina") return true;
-
-  const par = [ia, ib];
-  const ajustado = par.find((x) => x.tipo === "comoTermina" && x.opcion === "ajustado");
-  const handicap3 = par.find((x) => x.tipo === "handicap" && x.k >= 3);
-  if (ajustado && handicap3) return true;
-
-  const normal = par.find((x) => x.tipo === "comoTermina" && x.opcion === "normal");
-  const handicap19 = par.find((x) => x.tipo === "handicap" && x.k >= 19);
-  if (normal && handicap19) return true;
-
   return false;
 }
 
@@ -897,9 +888,9 @@ function TicketApuesta({ bettor, apuestas, onCerrar }) {
           )}
         </div>
         <div className="text-[12px] space-y-1 c-text-3 pt-2">
-          <div className="flex justify-between"><span>Total apostado</span><span className="font-bold c-text-1">{total} fichas</span></div>
+          <div className="flex justify-between"><span>Total apostado</span><span className="font-bold c-text-1">{total.toFixed(2)} fichas</span></div>
           <div className="flex justify-between font-bold border-t border-dashed c-bd-1 pt-1 mt-1">
-            <span>Premio máximo</span><span className="c-text-green">{premio.toFixed(0)} fichas</span>
+            <span>Premio máximo</span><span className="c-text-green">{premio.toFixed(2)} fichas</span>
           </div>
         </div>
       </div>
@@ -977,7 +968,7 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
             <Avatar name={nombre} size={32} />
             <div>
               <div className="font-bold c-text-1" style={{ fontFamily: "'Bebas Neue', sans-serif" }}>{nombre.toUpperCase()}</div>
-              <div className="text-xs c-text-2">Rating {Math.round(rating)}</div>
+              <div className="text-xs c-text-2">Rating {rating.toFixed(2)}</div>
             </div>
           </div>
           <button onClick={onCerrar} className="c-text-2"><X size={20} /></button>
@@ -1044,16 +1035,6 @@ export default function CasaApuestasPingpong() {
   const [modoSlip, setModoSlip] = useState("simples");
   const [stakeCombinada, setStakeCombinada] = useState("50");
   const [handicapK, setHandicapK] = useState(5);
-  const [mostrarFormHistorico, setMostrarFormHistorico] = useState(false);
-  const [histA, setHistA] = useState("");
-  const [histB, setHistB] = useState("");
-  const [histPa, setHistPa] = useState("");
-  const [histPb, setHistPb] = useState("");
-  const [histLadoA, setHistLadoA] = useState("Columpios");
-  const [histSolLado, setHistSolLado] = useState(null);
-  const [histViento, setHistViento] = useState(false);
-  const [histHora, setHistHora] = useState("");
-  const [histEsGM, setHistEsGM] = useState(false);
   const [lineaA, setLineaA] = useState(12);
   const [lineaB, setLineaB] = useState(12);
   const [ticketVisible, setTicketVisible] = useState(null);
@@ -1061,10 +1042,7 @@ export default function CasaApuestasPingpong() {
   const [error, setError] = useState("");
   const [celebracion, setCelebracion] = useState(null);
   const [confirmBorrar, setConfirmBorrar] = useState(false);
-  
-  // INICIAMOS MODO ESPECTADOR POR DEFECTO
-  const [modoEspectador, setModoEspectador] = useState(true); 
-  
+  const [modoEspectador, setModoEspectador] = useState(true);
   const [pidiendoPassword, setPidiendoPassword] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [csvVisible, setCsvVisible] = useState(null);
@@ -1074,6 +1052,13 @@ export default function CasaApuestasPingpong() {
   const [modoEditarCuotas, setModoEditarCuotas] = useState(false);
   const [editarCuotaObjetivo, setEditarCuotaObjetivo] = useState(null);
   const [editarCuotaInput, setEditarCuotaInput] = useState("");
+  
+  // MODAL PARA AÑADIR MERCADO PERSONALIZADO
+  const [modalNuevoMercado, setModalNuevoMercado] = useState(false);
+  const [nombreMercadoCustom, setNombreMercadoCustom] = useState("");
+  const [seleccionMercadoCustom, setSeleccionMercadoCustom] = useState("");
+  const [cuotaMercadoCustom, setCuotaMercadoCustom] = useState("");
+
   const prevSlipLen = useRef(0);
 
   useEffect(() => {
@@ -1083,6 +1068,39 @@ export default function CasaApuestasPingpong() {
       setCargando(false);
     })();
   }, []);
+
+  // SINCRONIZACIÓN AUTOMÁTICA DE CUOTAS EN LA CESTA
+  useEffect(() => {
+    if (!estado?.partidoAbierto) return;
+    const partidoActual = estado.partidoAbierto;
+    
+    // Necesitamos recalcular cuotas actuales para actualizar el slip si cambió algo
+    const analisisTemp = probabilidadYDetalle(estado.historial, partidoActual.a, partidoActual.b, ratingDe(partidoActual.a), ratingDe(partidoActual.b), partidoActual.ladoA, partidoActual.ladoB, partidoActual.solLado, partidoActual.viento);
+    const mercadosTemp = calcularMercadosDesdeProbabilidad(analisisTemp.pA, estado.margen, estado.historial, partidoActual.a, partidoActual.b);
+    const stakeA = sumaStakeGanador(partidoActual.apuestas, partidoActual.a);
+    const stakeB = sumaStakeGanador(partidoActual.apuestas, partidoActual.b);
+    const ganDineroTemp = cuotaGanadorConDinero(mercadosTemp.ganador.pA, estado.margen, stakeA, stakeB);
+
+    setSlip(prevSlip => prevSlip.map(s => {
+      let nuevaCuota = s.cuota;
+      let boostEncontrado = boostDe(partidoActual, s.mercado, s.seleccion);
+      
+      if (boostEncontrado) {
+        nuevaCuota = boostEncontrado;
+      } else if (s.mercado === "Ganador") {
+        if (s.seleccion === partidoActual.a) nuevaCuota = ganDineroTemp.A;
+        if (s.seleccion === partidoActual.b) nuevaCuota = ganDineroTemp.B;
+      } else if (s.mercado === "Resultado Exacto") {
+        const itemRes = mercadosTemp.resultadosExactos.find(r => r.marcador === s.seleccion);
+        if (itemRes) nuevaCuota = itemRes.cuota;
+      } else if (s.mercado === "Cómo termina") {
+        if (s.seleccion === "parciales") nuevaCuota = mercadosTemp.comoTermina.parciales;
+        if (s.seleccion === "normal") nuevaCuota = mercadosTemp.comoTermina.normal;
+        if (s.seleccion === "ajustado") nuevaCuota = mercadosTemp.comoTermina.ajustado;
+      }
+      return { ...s, cuota: Number(nuevaCuota.toFixed(2)) };
+    }));
+  }, [estado?.partidoAbierto?.boosts, estado?.margen]);
 
   useEffect(() => {
     if (slip.length > prevSlipLen.current) {
@@ -1124,7 +1142,6 @@ export default function CasaApuestasPingpong() {
     persistir({ ...estado, gm: nombre });
   }
 
-  // CONTRASEÑA PARA MODO BOSS
   const PASSWORD_BOSS = "123457";
 
   function pedirModoBoss() {
@@ -1150,7 +1167,7 @@ export default function CasaApuestasPingpong() {
 
   function exportarHistorial() {
     const csv = historialACSV(estado.historial);
-    try { descargarCSV(csv, "pinamax_historial.csv"); } catch (e) {  }
+    try { descargarCSV(csv, "pinamax_historial.csv"); } catch (e) {}
     setCsvCopiado(false);
     setCsvVisible(csv);
   }
@@ -1160,7 +1177,7 @@ export default function CasaApuestasPingpong() {
       await navigator.clipboard.writeText(csvVisible);
       setCsvCopiado(true);
     } catch (e) {
-      setError("No se pudo copiar automáticamente. Selecciona el texto a mano y cópialo.");
+      setError("No se pudo copiar automáticamente.");
     }
   }
 
@@ -1171,6 +1188,7 @@ export default function CasaApuestasPingpong() {
     const nuevo = {
       id: Date.now(), a: selA, b: selB, esGM: esGM && auto, apuestas: [],
       hora: horaInput, ladoA: ladoAInput, ladoB: ladoBAuto, solLado: solLadoInput, viento: vientoInput,
+      mercadosCustom: []
     };
     const rProb = probabilidadYDetalle(estado.historial, selA, selB, ratingDe(selA), ratingDe(selB), ladoAInput, ladoBAuto, solLadoInput, vientoInput);
     const perdGenerico = Math.round(19 * (1 - Math.abs(2 * rProb.pA - 1)));
@@ -1186,7 +1204,19 @@ export default function CasaApuestasPingpong() {
     setSelA(""); setSelB(""); setEsGM(false); setSolLadoInput(null); setVientoInput(false);
   }
 
+  // DEVOLUCIÓN DE PUNTOS AL CANCELAR PARTIDO
   function cancelarPartido() {
+    if (partido && partido.apuestas && partido.apuestas.length > 0) {
+      let nuevosBettors = { ...estado.bettors };
+      partido.apuestas.forEach(ap => {
+        if (ap.estado === "pendiente") {
+          nuevosBettors[ap.bettor] = (nuevosBettors[ap.bettor] || 500) + ap.stake;
+        }
+      });
+      setSlip([]);
+      persistir({ ...estado, bettors: nuevosBettors, partidoAbierto: null });
+      return;
+    }
     setSlip([]);
     persistir({ ...estado, partidoAbierto: null });
   }
@@ -1199,8 +1229,7 @@ export default function CasaApuestasPingpong() {
   }
 
   function guardarCuotaEditada() {
-    const { mercado, seleccion } = editarCuotaObjetivo;
-    // CONVERTIMOS LA COMA A PUNTO PARA QUE FUNCIONE SIEMPRE
+    const { mercado, seleccion, valorBase } = editarCuotaObjetivo;
     const valorLimpio = editarCuotaInput.trim().replace(',', '.');
     const val = valorLimpio ? Number(valorLimpio) : null;
     
@@ -1210,7 +1239,14 @@ export default function CasaApuestasPingpong() {
     }
     const nuevosBoosts = { ...(partido.boosts || {}) };
     const clave = claveBoost(mercado, seleccion);
-    if (val) nuevosBoosts[clave] = val; else delete nuevosBoosts[clave];
+    
+    // Si se borra o si se baja la cuota respecto al valor base, no debe mostrar el tag de supercuota especial (lo tratamos como cuota normal limpia)
+    if (val) {
+      nuevosBoosts[clave] = Number(val.toFixed(2));
+    } else {
+      delete nuevosBoosts[clave];
+    }
+    
     persistir({ ...estado, partidoAbierto: { ...partido, boosts: nuevosBoosts } });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
@@ -1232,7 +1268,7 @@ export default function CasaApuestasPingpong() {
       return;
     }
     const valorFinal = boostDe(partido, mercado, seleccion) ?? valorBase;
-    toggleSlip(mercado, seleccion, valorFinal);
+    toggleSlip(mercado, seleccion, Number(valorFinal.toFixed(2)));
   }
 
   function estaEnSlip(mercado, seleccion) {
@@ -1249,11 +1285,12 @@ export default function CasaApuestasPingpong() {
       return;
     }
     setError("");
-    setSlip([...slip, { id: Date.now() + Math.random(), mercado, seleccion, cuota, stake: 50 }]);
+    setSlip([...slip, { id: Date.now() + Math.random(), mercado, seleccion, cuota: Number(cuota.toFixed(2)), stake: 50 }]);
   }
 
   function actualizarStakeSlip(id, valor) {
-    setSlip(slip.map((s) => (s.id === id ? { ...s, stake: Number(valor) || 0 } : s)));
+    const valorLimpio = valor.replace(',', '.');
+    setSlip(slip.map((s) => (s.id === id ? { ...s, stake: Number(valorLimpio) || 0 } : s)));
   }
   function quitarDeSlip(id) {
     setSlip(slip.filter((s) => s.id !== id));
@@ -1267,87 +1304,81 @@ export default function CasaApuestasPingpong() {
     const bonus = bonusPorRachaApostante(rachaApostante);
 
     if (modoSlip === "combinada" && slip.length >= 2) {
-      const stake = Number(stakeCombinada) || 0;
-      if (stake <= 0) { setError("Pon una cantidad de fichas válida."); return; }
-      if (saldoActual < stake) { setError(`${nombre} solo tiene ${saldoActual} fichas.`); return; }
-      const cuotaTotal = Math.max(1.01, slip.reduce((acc, s) => acc * s.cuota, 1) * bonus);
+      const stakeVal = Number(stakeCombinada.replace(',', '.')) || 0;
+      if (stakeVal <= 0) { setError("Pon una cantidad de fichas válida."); return; }
+      if (saldoActual < stakeVal) { setError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas.`); return; }
+      const cuotaTotal = Math.max(1.01, Number((slip.reduce((acc, s) => acc * s.cuota, 1) * bonus).toFixed(2)));
       setError("");
       const apuesta = {
         id: Date.now(), bettor: nombre, tipo: "combinada",
-        patas: slip.map((s) => ({ mercado: s.mercado, seleccion: s.seleccion, cuota: s.cuota, boosteada: !!boostDe(partido, s.mercado, s.seleccion) })),
-        cuota: cuotaTotal, stake, estado: "pendiente", bonusRacha: bonus > 1 ? bonus : null,
+        patas: slip.map((s) => ({ mercado: s.mercado, seleccion: s.seleccion, cuota: Number(s.cuota.toFixed(2)), boosteada: !!boostDe(partido, s.mercado, s.seleccion) && boostDe(partido, s.mercado, s.seleccion) >= s.cuota })),
+        cuota: cuotaTotal, stake: stakeVal, estado: "pendiente", bonusRacha: bonus > 1 ? bonus : null,
       };
-      const nuevosBettors = { ...estado.bettors, [nombre]: saldoActual - stake };
+      const nuevosBettors = { ...estado.bettors, [nombre]: Number((saldoActual - stakeVal).toFixed(2)) };
       const nuevoPartido = { ...partido, apuestas: [...partido.apuestas, apuesta] };
       persistir({ ...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido });
       setTicketVisible({ bettor: nombre, apuestas: [apuesta] });
-      if (slip.some((s) => boostDe(partido, s.mercado, s.seleccion))) setCelebracion({ nombre, tipo: "supercuota" });
+      if (slip.some((s) => { const b = boostDe(partido, s.mercado, s.seleccion); return b && b >= s.cuota; })) {
+        setCelebracion({ nombre, tipo: "supercuota" });
+      }
       setSlip([]); setSlipOpen(false); setBettorSlip(""); setStakeCombinada("50");
       return;
     }
 
     const totalStake = slip.reduce((s, x) => s + x.stake, 0);
     if (slip.some((s) => !s.stake || s.stake <= 0)) { setError("Todas las apuestas necesitan una cantidad de fichas."); return; }
-    if (saldoActual < totalStake) { setError(`${nombre} solo tiene ${saldoActual} fichas y esta cesta suma ${totalStake}.`); return; }
+    if (saldoActual < totalStake) { setError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas y esta cesta suma ${totalStake.toFixed(2)}.`); return; }
     setError("");
-    const nuevasApuestas = slip.map((s) => ({ id: s.id, bettor: nombre, mercado: s.mercado, seleccion: s.seleccion, cuota: Math.max(1.01, s.cuota * bonus), stake: s.stake, estado: "pendiente", bonusRacha: bonus > 1 ? bonus : null, boosteada: !!boostDe(partido, s.mercado, s.seleccion) }));
-    const nuevosBettors = { ...estado.bettors, [nombre]: saldoActual - totalStake };
+    const nuevasApuestas = slip.map((s) => {
+      const cuotaFinalCalc = Number((s.cuota * bonus).toFixed(2));
+      const bOriginal = boostDe(partido, s.mercado, s.seleccion);
+      const esBoostReal = bOriginal && bOriginal >= s.cuota;
+      return { 
+        id: s.id, bettor: nombre, mercado: s.mercado, seleccion: s.seleccion, 
+        cuota: cuotaFinalCalc, stake: Number(s.stake.toFixed(2)), estado: "pendiente", 
+        bonusRacha: bonus > 1 ? bonus : null, boosteada: !!esBoostReal 
+      };
+    });
+    const nuevosBettors = { ...estado.bettors, [nombre]: Number((saldoActual - totalStake).toFixed(2)) };
     const nuevoPartido = { ...partido, apuestas: [...partido.apuestas, ...nuevasApuestas] };
     persistir({ ...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido });
     setTicketVisible({ bettor: nombre, apuestas: nuevasApuestas });
-    if (slip.some((s) => boostDe(partido, s.mercado, s.seleccion))) setCelebracion({ nombre, tipo: "supercuota" });
+    if (nuevasApuestas.some(ap => ap.boosteada)) setCelebracion({ nombre, tipo: "supercuota" });
     setSlip([]); setSlipOpen(false); setBettorSlip("");
   }
 
-  function agregarResultadoHistorico() {
-    const a = histA.trim(), b = histB.trim();
-    const pa = Number(histPa), pb = Number(histPb);
-    if (!a || !b || a === b) { setError("Elige dos jugadores distintos."); return; }
-    if (isNaN(pa) || isNaN(pb) || pa === pb) { setError("Introduce un marcador válido (sin empate)."); return; }
-    if (Math.abs(pa - pb) < 2) { setError("En pingpong se gana por al menos 2 puntos de diferencia."); return; }
+  // LIBERTAD PARA AÑADIR UN NUEVO MERCADO PERSONALIZADO
+  function crearMercadoCustom() {
+    const mNombre = nombreMercadoCustom.trim();
+    const mSel = seleccionMercadoCustom.trim();
+    const mCuotaVal = Number(cuotaMercadoCustom.trim().replace(',', '.'));
+
+    if (!mNombre || !mSel || isNaN(mCuotaVal) || mCuotaVal < 1.01) {
+      setError("Rellena todos los campos del mercado personalizado con valores válidos (cuota >= 1.01).");
+      return;
+    }
+
     setError("");
+    const listaActual = partido.mercadosCustom || [];
+    const nuevoCustom = { id: Date.now(), mercado: mNombre, seleccion: mSel, cuota: Number(mCuotaVal.toFixed(2)) };
+    const partidoActualizado = { ...partido, mercadosCustom: [...listaActual, nuevoCustom] };
+    persistir({ ...estado, partidoAbierto: partidoActualizado });
+    setNombreMercadoCustom("");
+    setSeleccionMercadoCustom("");
+    setCuotaMercadoCustom("");
+    setModalNuevoMercado(false);
+  }
 
-    const ladoB = histLadoA === "Canasta" ? "Columpios" : "Canasta";
-    const ratingA0 = ratingDe(a), ratingB0 = ratingDe(b);
-    const ganoA = pa > pb;
-    const ganador = ganoA ? a : b;
-    const perdedor = ganoA ? b : a;
-    const { pA: pAjustadaA } = probabilidadYDetalle(estado.historial, a, b, ratingA0, ratingB0, histLadoA, ladoB, histSolLado, histViento);
-    const pBajustadaB = 1 - pAjustadaA;
-    const sA_ = ganoA ? 1 : 0, sB_ = ganoA ? 0 : 1;
-    const nuevoA = ratingA0 + K_FACTOR * (sA_ - pAjustadaA);
-    const nuevoB = ratingB0 + K_FACTOR * (sB_ - pBajustadaB);
-    const { gm, pendiente } = actualizarTitulo(estado.gm, estado.pendiente, histEsGM, ganador);
-
-    const partidoCerrado = {
-      id: Date.now() + Math.random(), a, b, esGM: !!histEsGM,
-      hora: histHora.trim() || null, ladoA: histLadoA, ladoB, solLado: histSolLado || null, viento: !!histViento,
-      pa, pb, ganador, perdedor,
-      teamA: [a], teamB: [b], aLabel: a, bLabel: b,
-      ratingsAntes: { [a]: ratingA0, [b]: ratingB0 },
-      ratingsDespues: { [a]: nuevoA, [b]: nuevoB },
-      apuestas: [],
-      fecha: new Date().toISOString(),
-    };
-    const coronacion = !!(gm && gm !== estado.gm);
-    const rachaRota = calcularRacha(estado.historial, perdedor) >= 3;
-    partidoCerrado.titular = generarTitular(partidoCerrado, coronacion, rachaRota);
-    if (gm && gm !== estado.gm) setCelebracion({ nombre: gm, tipo: "gm" });
-
-    persistir({
-      ...estado,
-      jugadores: { ...estado.jugadores, [a]: nuevoA, [b]: nuevoB },
-      gm, pendiente,
-      historial: [partidoCerrado, ...estado.historial],
-    });
-
-    setHistPa(""); setHistPb(""); setHistHora(""); setHistEsGM(false);
+  function eliminarMercadoCustom(idCustom) {
+    const listaActual = partido.mercadosCustom || [];
+    const partidoActualizado = { ...partido, mercadosCustom: listaActual.filter(item => item.id !== idCustom) };
+    persistir({ ...estado, partidoAbierto: partidoActualizado });
   }
 
   function registrarResultado() {
     const pa = Number(marcador.a), pb = Number(marcador.b);
     if (isNaN(pa) || isNaN(pb) || pa === pb) { setError("Introduce un marcador válido (sin empate)."); return; }
-    if (Math.abs(pa - pb) < 2) { setError("En pingpong se gana por al menos 2 puntos de diferencia (ej. 21-19, o 23-21 si hubo empate a 20)."); return; }
+    if (Math.abs(pa - pb) < 2) { setError("En pingpong se gana por al menos 2 puntos de diferencia."); return; }
     setError("");
     const ratingA0 = ratingDe(partido.a), ratingB0 = ratingDe(partido.b);
     const ganoA = pa > pb;
@@ -1366,13 +1397,22 @@ export default function CasaApuestasPingpong() {
         const todasAciertan = ap.patas.every((p) => evaluarPata(p.mercado, p.seleccion, ctx));
         return { ...ap, estado: todasAciertan ? "ganada" : "perdida" };
       }
-      const acierto = evaluarPata(ap.mercado, ap.seleccion, ctx);
+      let acierto = false;
+      // Comprobar si es un mercado customizado
+      if (partido.mercadosCustom && partido.mercadosCustom.some(c => c.mercado === ap.mercado && c.seleccion === ap.seleccion)) {
+        // Por defecto evaluamos si el texto de selección coincide de algún modo o ganancia personalizada
+        acierto = ap.seleccion.toLowerCase().includes(ganador.toLowerCase()) || (ap.mercado.toLowerCase().includes("resultado") && ap.seleccion === `${pa}-${pb}`);
+      } else {
+        acierto = evaluarPata(ap.mercado, ap.seleccion, ctx);
+      }
       return { ...ap, estado: acierto ? "ganada" : "perdida" };
     });
 
     const nuevosBettors = { ...estado.bettors };
     apuestasResueltas.forEach((ap) => {
-      if (ap.estado === "ganada") nuevosBettors[ap.bettor] = (nuevosBettors[ap.bettor] ?? 500) + ap.stake * ap.cuota;
+      if (ap.estado === "ganada") {
+        nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] ?? 500) + ap.stake * ap.cuota).toFixed(2));
+      }
     });
 
     const partidoCerrado = {
@@ -1399,17 +1439,15 @@ export default function CasaApuestasPingpong() {
     setMarcador({ a: "", b: "" });
   }
 
-  // FUNCIÓN PARA ELIMINAR PARTIDO Y DESHACER CAMBIOS SI ES EL ÚLTIMO
   function eliminarPartidoHistorial(idPartido) {
     const partidoABorrar = estado.historial.find(p => p.id === idPartido);
     if (!partidoABorrar) return;
 
-    if (window.confirm("¿Seguro que quieres borrar este partido del historial? Si es el último que se ha jugado, se devolverá el dinero apostado y se restaurará el ELO automáticamente.")) {
+    if (window.confirm("¿Seguro que quieres borrar este partido del historial? Se devolverán las fichas y se restaurará el ELO.")) {
       const nuevoHistorial = estado.historial.filter((p) => p.id !== idPartido);
       let nuevosJugadores = { ...estado.jugadores };
       let nuevosBettors = { ...estado.bettors };
 
-      // Si es el partido más reciente (índice 0), revertimos con precisión quirúrgica
       if (estado.historial[0].id === idPartido) {
         if (partidoABorrar.ratingsAntes) {
           Object.entries(partidoABorrar.ratingsAntes).forEach(([jugador, eloAnterior]) => {
@@ -1419,9 +1457,9 @@ export default function CasaApuestasPingpong() {
         if (partidoABorrar.apuestas) {
           partidoABorrar.apuestas.forEach(ap => {
              if (ap.estado === "ganada") {
-                nuevosBettors[ap.bettor] = (nuevosBettors[ap.bettor] || 0) - (ap.stake * ap.cuota) + ap.stake;
+                nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) - (ap.stake * ap.cuota) + ap.stake).toFixed(2));
              } else if (ap.estado === "perdida") {
-                nuevosBettors[ap.bettor] = (nuevosBettors[ap.bettor] || 0) + ap.stake;
+                nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
              }
           });
         }
@@ -1451,8 +1489,12 @@ export default function CasaApuestasPingpong() {
   
   const conBoost = (mercado, seleccion, base) => {
     const b = partido ? boostDe(partido, mercado, seleccion) : null;
-    return { valor: b ?? base, base, boosteado: b != null };
+    const valorReal = b ?? base;
+    // Si edité la cuota para bajarla respecto a la base, no debe mostrar el tag de supercuota ("boosteado" = falso)
+    const esRealBoost = b !== null && b > base;
+    return { valor: valorReal, base, boosteado: !modoEspectador && esRealBoost };
   };
+
   const bGanadorA = ganadorConDinero ? conBoost("Ganador", partido.a, ganadorConDinero.A) : null;
   const bGanadorB = ganadorConDinero ? conBoost("Ganador", partido.b, ganadorConDinero.B) : null;
   const rachaA = partido ? calcularRacha(estado.historial, partido.a) : 0;
@@ -1482,6 +1524,7 @@ export default function CasaApuestasPingpong() {
   const bComoParciales = mercados ? conBoost("Cómo termina", "parciales", mercados.comoTermina.parciales) : null;
   const bComoNormal = mercados ? conBoost("Cómo termina", "normal", mercados.comoTermina.normal) : null;
   const bComoAjustado = mercados ? conBoost("Cómo termina", "ajustado", mercados.comoTermina.ajustado) : null;
+  
   const hayBoostsActivos = partido?.boosts && Object.keys(partido.boosts).length > 0;
   const totalSlipStake = slip.reduce((s, x) => s + x.stake, 0);
   const totalSlipPremio = slip.reduce((s, x) => s + x.stake * x.cuota, 0);
@@ -1709,7 +1752,7 @@ export default function CasaApuestasPingpong() {
               <div className="flex items-center justify-between">
                 <Chip tone="live">● en juego</Chip>
                 {partido.esGM && <Chip tone="gold"><Crown size={10} className="inline -mt-0.5" /> título en juego</Chip>}
-                {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">cancelar</button>}
+                {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">cancelar partido (devuelve puntos)</button>}
               </div>
               <div className="flex items-center gap-2 mt-2">
                 <Avatar name={partido.a} size={32} />
@@ -1737,40 +1780,96 @@ export default function CasaApuestasPingpong() {
                   <AnalisisColumna nombre={partido.a} detalle={analisis.detalleA} />
                   <AnalisisColumna nombre={partido.b} detalle={analisis.detalleB} />
                 </div>
-                <div className="text-[10px] c-text-4 pt-1">Con pocos partidos el efecto se atenúa automáticamente (no se dispara al 100% solo por 1 o 2 resultados).</div>
+                <div className="text-[10px] c-text-4 pt-1">Con pocos partidos el efecto se atenúa automáticamente.</div>
               </Panel>
             )}
 
             <Panel icon={Trophy} titulo="Ganador" badge={
               !modoEspectador && (
-                <button onClick={() => setModoEditarCuotas(!modoEditarCuotas)} className={`text-[10px] underline font-bold ${modoEditarCuotas ? "c-text-mesa" : "c-text-orange"}`}>
-                  {modoEditarCuotas ? "✓ editando cuotas (toca una)" : "✏️ editar cuotas"}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setModalNuevoMercado(true)} className="text-[10px] underline font-bold c-text-blue">
+                    ➕ Añadir mercado libre
+                  </button>
+                  <button onClick={() => setModoEditarCuotas(!modoEditarCuotas)} className={`text-[10px] underline font-bold ${modoEditarCuotas ? "c-text-mesa" : "c-text-orange"}`}>
+                    {modoEditarCuotas ? "✓ editando cuotas" : "✏️ editar cuotas"}
+                  </button>
+                </div>
               )
             }>
               {(Math.abs(rachaA) >= 3 || Math.abs(rachaB) >= 3) && (
                 <div className="flex flex-wrap gap-1.5 -mt-1">
-                  {Math.abs(rachaA) >= 3 && <Chip tone={rachaA > 0 ? "gold" : "info"}>{rachaA > 0 ? "🔥" : "❄️"} {partido.a} {Math.abs(rachaA)} seguidas {rachaA > 0 ? "ganadas" : "perdidas"}</Chip>}
-                  {Math.abs(rachaB) >= 3 && <Chip tone={rachaB > 0 ? "gold" : "info"}>{rachaB > 0 ? "🔥" : "❄️"} {partido.b} {Math.abs(rachaB)} seguidas {rachaB > 0 ? "ganadas" : "perdidas"}</Chip>}
+                  {Math.abs(rachaA) >= 3 && <Chip tone={rachaA > 0 ? "gold" : "info"}>{rachaA > 0 ? "🔥" : "❄️"} {partido.a} {Math.abs(rachaA)} seguidas</Chip>}
+                  {Math.abs(rachaB) >= 3 && <Chip tone={rachaB > 0 ? "gold" : "info"}>{rachaB > 0 ? "🔥" : "❄️"} {partido.b} {Math.abs(rachaB)} seguidas</Chip>}
                 </div>
               )}
-              {hayBoostsActivos && (
+              {hayBoostsActivos && !modoEspectador && (
                 <div className="flex flex-wrap gap-1.5 -mt-1">
-                  <Chip tone="gold">🔥 hay supercuotas activas en esta mesa</Chip>
+                  <Chip tone="gold">🔥 hay cuotas ajustadas/mejoradas en esta mesa</Chip>
                 </div>
               )}
               {!bGanadorA.boosteado && !bGanadorB.boosteado && ganadorConDinero && Math.abs(ganadorConDinero.ajuste) > 0.01 && (
                 <div className="flex flex-wrap gap-1.5 -mt-1">
                   <Chip tone="info">
-                    ⚖️ {stakeGanadorA > stakeGanadorB ? partido.a : partido.b} tiene más dinero apostado ({Math.round(100 * Math.max(stakeGanadorA, stakeGanadorB) / (stakeGanadorA + stakeGanadorB))}%) · cuotas ajustadas
+                    ⚖️ {stakeGanadorA > stakeGanadorB ? partido.a : partido.b} acumula más volumen en caja
                   </Chip>
                 </div>
               )}
               <div className="flex gap-2">
                 <BotonCuota etiqueta={partido.a} valor={bGanadorA.valor} valorBase={bGanadorA.base} boosteado={bGanadorA.boosteado} activo={!!estaEnSlip("Ganador", partido.a)} onClick={() => manejarClicCuota("Ganador", partido.a, ganadorConDinero.A, partido.a)} />
-                <BotonCuota etiqueta={partido.b} valor={bGanadorB.valor} valorBase={bGanadorB.base} boosteado={bGanadorB.boosteado} activo={!!estaEnSlip("Ganador", partido.b)} onClick={() => manejarClicCuota("Ganador", partido.b, ganadorConDinero.B, partido.b)} />
+                <BotonCuota etiqueta={partido.b} valor={bGanadorB.valor} valorBase={bGanadorB.base} boosteado={bGanadorB.boosteado} activo={!!estaEnSlip("Ganador", partido.b)} onClick={() => manejarClicCuota("Ganador", partido.b, ganadorConDinero.B, ganadorConDinero.B, partido.b)} />
               </div>
             </Panel>
+
+            {/* APUESTA A RESULTADO CONCRETO */}
+            <Panel icon={Ticket} titulo="Resultado exacto">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {mercados.resultadosExactos.map((res) => {
+                  const bRes = conBoost("Resultado Exacto", res.marcador, res.cuota);
+                  const activo = !!estaEnSlip("Resultado Exacto", res.marcador);
+                  return (
+                    <BotonCuota 
+                      key={res.marcador} 
+                      etiqueta={res.marcador} 
+                      valor={bRes.valor} 
+                      valorBase={bRes.base} 
+                      boosteado={bRes.boosteado} 
+                      activo={activo} 
+                      onClick={() => manejarClicCuota("Resultado Exacto", res.marcador, res.cuota, `Resultado ${res.marcador}`)} 
+                    />
+                  );
+                })}
+              </div>
+            </Panel>
+
+            {/* MERCADOS PERSONALIZADOS LIBRES AÑADIDOS POR EL BOSS */}
+            {partido.mercadosCustom && partido.mercadosCustom.length > 0 && (
+              <Panel icon={Plus} titulo="Mercados personalizados (Libre)">
+                <div className="space-y-2">
+                  {partido.mercadosCustom.map(custom => {
+                    const activo = !!estaEnSlip(custom.mercado, custom.seleccion);
+                    return (
+                      <div key={custom.id} className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <BotonCuota 
+                            etiqueta={`${custom.mercado}: ${custom.seleccion}`} 
+                            valor={custom.cuota} 
+                            valorBase={custom.cuota} 
+                            boosteado={false} 
+                            activo={activo} 
+                            onClick={() => manejarClicCuota(custom.mercado, custom.seleccion, custom.cuota, `${custom.mercado} - ${custom.seleccion}`)} 
+                          />
+                        </div>
+                        {!modoEspectador && (
+                          <button onClick={() => eliminarMercadoCustom(custom.id)} className="text-red-500 hover:text-red-700 p-1">
+                            <X size={16} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </Panel>
+            )}
 
             <Panel icon={Swords} titulo="Diferencia de puntos">
               <div className="space-y-2">
@@ -1785,9 +1884,6 @@ export default function CasaApuestasPingpong() {
                     {handicapLados.mostrarMas && <BotonCuota etiqueta={`Gana ${partido.a}`} valor={bHandicapA.valor} valorBase={bHandicapA.base} boosteado={bHandicapA.boosteado} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.a)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.a, handicapVivo.cuotaA, `Gana ${partido.a}`)} />}
                     {handicapLados.mostrarMenos && <BotonCuota etiqueta={`Gana ${partido.b}`} valor={bHandicapB.valor} valorBase={bHandicapB.base} boosteado={bHandicapB.boosteado} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.b)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.b, handicapVivo.cuotaB, `Gana ${partido.b}`)} />}
                   </div>
-                )}
-                {handicapVivo && !handicapLados.mostrarMas && !handicapLados.mostrarMenos && (
-                  <p className="text-[10px] c-text-2">Con este margen, la cuota ya no varía; prueba a bajar el número.</p>
                 )}
               </div>
             </Panel>
@@ -1807,9 +1903,6 @@ export default function CasaApuestasPingpong() {
                       {variacionA.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaAClamp}`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}`)} />}
                     </div>
                   )}
-                  {puntosAVivo && !variacionA.mostrarMas && !variacionA.mostrarMenos && (
-                    <p className="text-[10px] c-text-2 mt-1">Sin apuesta de puntos interesante para {partido.a} en este partido (la cuota casi no cambia).</p>
-                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -1824,9 +1917,6 @@ export default function CasaApuestasPingpong() {
                       {variacionB.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaBClamp}`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}`)} />}
                     </div>
                   )}
-                  {puntosBVivo && !variacionB.mostrarMas && !variacionB.mostrarMenos && (
-                    <p className="text-[10px] c-text-2 mt-1">Sin apuesta de puntos interesante para {partido.b} en este partido (la cuota casi no cambia).</p>
-                  )}
                 </div>
               </div>
             </Panel>
@@ -1837,7 +1927,6 @@ export default function CasaApuestasPingpong() {
                 <BotonCuota etiqueta="Normal (3-19)" valor={bComoNormal.valor} valorBase={bComoNormal.base} boosteado={bComoNormal.boosteado} activo={!!estaEnSlip("Cómo termina", "normal")} onClick={() => manejarClicCuota("Cómo termina", "normal", mercados.comoTermina.normal, "Normal")} />
                 <BotonCuota etiqueta="Ajustado (deuce)" valor={bComoAjustado.valor} valorBase={bComoAjustado.base} boosteado={bComoAjustado.boosteado} activo={!!estaEnSlip("Cómo termina", "ajustado")} onClick={() => manejarClicCuota("Cómo termina", "ajustado", mercados.comoTermina.ajustado, "Ajustado")} />
               </div>
-              <p className="text-[10px] c-text-2">Parciales: el rival se queda en 0, 1 o 2 puntos (7-0, 9-1, 11-2...). Normal: se llega a 21 con el rival entre 3 y 19. Ajustado: hay que pasar de 21 y se gana por 2 (22-20, 23-21...). Las probabilidades se calculan mezclando el modelo con los partidos reales ya jugados.</p>
             </Panel>
 
             {partido.apuestas.length > 0 && (
@@ -1847,9 +1936,9 @@ export default function CasaApuestasPingpong() {
                     <div key={ap.id} className="flex justify-between text-xs border-b c-bd-2 pb-1 c-text-3">
                       <span className="flex items-center gap-1">
                         <Avatar name={ap.bettor} size={16} />{ap.bettor} ·{" "}
-                        {ap.tipo === "combinada" ? `Combinada (${ap.patas.length}): ${ap.patas.map((p) => `${p.seleccion}`).join(" + ")}` : `${ap.mercado} · ${ap.seleccion}`}
+                        {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}
                       </span>
-                      <span className="font-mono c-text-orange">{ap.stake} × {ap.cuota.toFixed(2)}</span>
+                      <span className="font-mono c-text-orange">{ap.stake.toFixed(2)} × {ap.cuota.toFixed(2)} (Premio: {(ap.stake * ap.cuota).toFixed(2)})</span>
                     </div>
                   ))}
                 </div>
@@ -1899,7 +1988,7 @@ export default function CasaApuestasPingpong() {
                         {Math.abs(racha) >= 3 && <span className="shrink-0">{racha > 0 ? "🔥" : "❄️"}</span>}
                         {!estado.gm && !modoEspectador && <span onClick={(e) => { e.stopPropagation(); fijarGMInicial(n); }} className="text-[10px] underline c-text-orange shrink-0">hacer Gran Maestro</span>}
                       </div>
-                      <span className="font-mono text-sm c-text-orange font-bold shrink-0">{Math.round(estado.jugadores[n])}</span>
+                      <span className="font-mono text-sm c-text-orange font-bold shrink-0">{estado.jugadores[n].toFixed(2)}</span>
                     </button>
                     );
                   })}
@@ -1926,7 +2015,7 @@ export default function CasaApuestasPingpong() {
                             <div className="text-[10px] c-text-1 font-semibold truncate w-full text-center">{n}</div>
                             <div className={`w-full ${alturaOrden} rounded-t-md c-grad-podio border c-bd-2b flex flex-col items-center justify-end pb-1`}>
                               <span className="text-lg">{medalla}</span>
-                              <span className="text-[10px] font-mono font-bold c-text-orange">{Math.round(saldo)}</span>
+                              <span className="text-[10px] font-mono font-bold c-text-orange">{saldo.toFixed(0)}</span>
                             </div>
                             {est.total > 0 && <div className="text-[9px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</div>}
                           </div>
@@ -1941,7 +2030,7 @@ export default function CasaApuestasPingpong() {
                         <span className="flex items-center gap-2 c-text-3"><span className="text-xs c-text-2 w-4">{i + 4}</span><Avatar name={n} size={20} />{n}</span>
                         <span className="flex items-center gap-2">
                           {est.total > 0 && <span className="text-[10px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</span>}
-                          <span className="font-mono font-bold c-text-1">{Math.round(saldo)}</span>
+                          <span className="font-mono font-bold c-text-1">{saldo.toFixed(2)}</span>
                         </span>
                       </div>
                     );
@@ -1949,19 +2038,6 @@ export default function CasaApuestasPingpong() {
                 </div>
               )}
             </Panel>
-
-            {(rankingEstilo.reyParciales || rankingEstilo.reyDeuce) && (
-              <Panel icon={Trophy} titulo="🏅 Estilos de la temporada">
-                <div className="space-y-1.5 text-sm">
-                  {rankingEstilo.reyParciales && (
-                    <div className="flex justify-between"><span className="c-text-2">🥊 Rey de los parciales</span><span className="font-bold c-text-1">{rankingEstilo.reyParciales[0]} ({rankingEstilo.reyParciales[1].parciales})</span></div>
-                  )}
-                  {rankingEstilo.reyDeuce && (
-                    <div className="flex justify-between"><span className="c-text-2">😅 Rey del deuce</span><span className="font-bold c-text-1">{rankingEstilo.reyDeuce[0]} ({rankingEstilo.reyDeuce[1].deuceGanados}/{rankingEstilo.reyDeuce[1].deuceJugados})</span></div>
-                  )}
-                </div>
-              </Panel>
-            )}
 
             {!modoEspectador && (
               <Panel icon={Swords} titulo="Margen de la casa">
@@ -1972,53 +2048,6 @@ export default function CasaApuestasPingpong() {
                 </div>
               </Panel>
             )}
-
-            {(() => {
-              const registrosGlobales = construirRegistrosPorJugador(estado.historial);
-              const todos = Object.values(registrosGlobales).flat();
-              const pct = (subset) => (subset.length ? `${subset.filter((r) => r.gano).length}/${subset.length} (${Math.round((100 * subset.filter((r) => r.gano).length) / subset.length)}%)` : "–");
-              const canasta = todos.filter((r) => r.lado === "Canasta");
-              const columpios = todos.filter((r) => r.lado === "Columpios");
-              if (todos.length === 0) return null;
-              return (
-                <Panel icon={Users} titulo="Estadísticas por campo">
-                  <div className="flex justify-between text-xs c-text-3 pb-1 border-b c-bd-2">
-                    <span>Global en Canasta</span><span className="font-mono">{pct(canasta)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs c-text-3 pb-2">
-                    <span>Global en Columpios</span><span className="font-mono">{pct(columpios)}</span>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-[11px]">
-                      <thead>
-                        <tr className="c-text-2 text-left">
-                          <th className="font-semibold pb-1">Jugador</th>
-                          <th className="font-semibold pb-1 text-right">Canasta</th>
-                          <th className="font-semibold pb-1 text-right">Columpios</th>
-                          <th className="font-semibold pb-1 text-right">Sol en contra</th>
-                          <th className="font-semibold pb-1 text-right">Viento</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Object.keys(registrosGlobales).map((n) => {
-                          const regs = registrosGlobales[n];
-                          return (
-                            <tr key={n} className="border-t c-bd-2">
-                              <td className="py-1 c-text-1 flex items-center gap-1"><Avatar name={n} size={16} />{n}</td>
-                              <td className="py-1 text-right font-mono c-text-3">{pct(regs.filter((r) => r.lado === "Canasta"))}</td>
-                              <td className="py-1 text-right font-mono c-text-3">{pct(regs.filter((r) => r.lado === "Columpios"))}</td>
-                              <td className="py-1 text-right font-mono c-text-3">{pct(regs.filter((r) => r.solLeMolesta))}</td>
-                              <td className="py-1 text-right font-mono c-text-3">{pct(regs.filter((r) => r.viento))}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="text-[10px] c-text-4 pt-1">Solo partidos individuales (los dobles no se cuentan aquí). Estas son las cifras en bruto; las cuotas las ajustan de forma más prudente cuando hay pocos partidos.</div>
-                </Panel>
-              );
-            })()}
           </div>
         )}
 
@@ -2059,15 +2088,15 @@ export default function CasaApuestasPingpong() {
                     <div className="text-xs c-text-2">
                       Ganó <b className="c-text-green">{p.ganador}</b> · ratings:{" "}
                       {Object.entries(p.ratingsAntes).map(([n, antes], i) => (
-                        <span key={n}>{i > 0 && ", "}{n} {Math.round(antes)}→{Math.round(p.ratingsDespues[n])}</span>
+                        <span key={n}>{i > 0 && ", "}{n} {antes.toFixed(0)}→{p.ratingsDespues[n].toFixed(0)}</span>
                       ))}
                     </div>
                     {p.apuestas.length > 0 && (
                       <div className="pt-1 space-y-0.5">
                         {p.apuestas.map((ap) => (
                           <div key={ap.id} className={`text-xs flex justify-between ${ap.estado === "ganada" ? "c-text-green" : "c-text-red2"}`}>
-                            <span>{ap.bettor} · {ap.tipo === "combinada" ? `Combinada (${ap.patas.length}): ${ap.patas.map((pt) => pt.seleccion).join(" + ")}` : `${ap.mercado} · ${ap.seleccion}`}</span>
-                            <span className="font-semibold">{ap.estado === "ganada" ? `+${Math.round(ap.stake * ap.cuota)}` : `-${ap.stake}`}</span>
+                            <span>{ap.bettor} · {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
+                            <span className="font-semibold">{ap.estado === "ganada" ? `+${(ap.stake * ap.cuota).toFixed(2)}` : `-${ap.stake.toFixed(2)}`}</span>
                           </div>
                         ))}
                       </div>
@@ -2086,7 +2115,7 @@ export default function CasaApuestasPingpong() {
           style={{ animation: fabPop ? "fabPop .26s ease" : "none" }}
           className="fixed bottom-20 right-4 z-40 c-bg-orange c-text-dark-on-accent rounded-full pl-3 pr-4 py-3 c-shadow-fab flex items-center gap-2 font-bold text-sm"
         >
-          <Ticket size={18} /> {slip.length} · {totalSlipStake} fichas
+          <Ticket size={18} /> {slip.length} · {totalSlipStake.toFixed(2)} fichas (Premio: {totalSlipPremio.toFixed(2)})
         </button>
       )}
 
@@ -2108,7 +2137,7 @@ export default function CasaApuestasPingpong() {
         <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50" onClick={() => setSlipOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl p-4 w-full max-w-md space-y-3 border-t c-bd-1 c-maxh-80vh overflow-y-auto c-anim-fadein-2">
             <div className="flex justify-between items-center">
-              <div className="font-bold c-text-1 flex items-center gap-1.5"><Ticket size={16} className="c-text-orange" /> Cesta de apuestas</div>
+              <div className="font-bold c-text-1 flex items-center gap-1.5"><Ticket size={16} className="c-text-orange" /> Cesta de apuestas (Actualización automática de cuotas)</div>
               <button onClick={() => setSlipOpen(false)} className="c-text-2"><X size={18} /></button>
             </div>
             {slip.length === 0 ? (
@@ -2125,10 +2154,11 @@ export default function CasaApuestasPingpong() {
                   <div key={s.id} className="flex items-center gap-2 c-bg-app rounded-lg p-2 border c-bd-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-xs c-text-2 truncate">{s.mercado}</div>
-                      <div className="text-sm font-bold c-text-1">{s.seleccion} <span className="c-text-orange">{s.cuota.toFixed(2)}</span></div>
+                      <div className="text-sm font-bold c-text-1">{s.seleccion} <span className="c-text-orange">Cuota: {s.cuota.toFixed(2)}</span></div>
+                      <div className="text-[11px] c-text-green font-medium">Ganancia potencial: {(s.stake * s.cuota).toFixed(2)} fichas</div>
                     </div>
                     {modoSlip === "simples" || slip.length < 2 ? (
-                      <input inputMode="numeric" value={s.stake} onChange={(e) => actualizarStakeSlip(s.id, e.target.value)} className="w-16 rounded-lg border c-bd-1 c-bg-app p-1.5 text-sm text-center c-text-1" />
+                      <input inputMode="decimal" value={s.stake} onChange={(e) => actualizarStakeSlip(s.id, e.target.value)} className="w-20 rounded-lg border c-bd-1 c-bg-app p-1.5 text-sm text-center c-text-1" placeholder="Stake" />
                     ) : null}
                     <button onClick={() => quitarDeSlip(s.id)} className="c-text-red2"><X size={16} /></button>
                   </div>
@@ -2140,7 +2170,7 @@ export default function CasaApuestasPingpong() {
                   <>
                     <div className="flex items-center gap-2">
                       <span className="text-sm c-text-2">Fichas a jugar</span>
-                      <input inputMode="numeric" value={stakeCombinada} onChange={(e) => setStakeCombinada(e.target.value)} className="flex-1 rounded-lg border c-bd-1 c-bg-app p-1.5 text-sm text-center c-text-1" />
+                      <input inputMode="decimal" value={stakeCombinada} onChange={(e) => setStakeCombinada(e.target.value)} className="flex-1 rounded-lg border c-bd-1 c-bg-app p-1.5 text-sm text-center c-text-1" />
                     </div>
                     <div className="flex justify-between text-sm c-text-3 px-1">
                       <span>Cuota combinada ({slip.length} patas)</span>
@@ -2148,17 +2178,16 @@ export default function CasaApuestasPingpong() {
                     </div>
                     <div className="flex justify-between text-sm c-text-3 px-1">
                       <span>Premio si aciertas todas</span>
-                      <span className="font-bold c-text-green">{(Math.max(1.01, slip.reduce((acc, s) => acc * s.cuota, 1)) * (Number(stakeCombinada) || 0)).toFixed(0)} fichas</span>
+                      <span className="font-bold c-text-green">{(Math.max(1.01, slip.reduce((acc, s) => acc * s.cuota, 1)) * (Number(stakeCombinada.replace(',', '.')) || 0)).toFixed(2)} fichas</span>
                     </div>
-                    <p className="text-[10px] c-text-2">Solo se paga si aciertan TODAS las patas.</p>
                   </>
                 ) : (
                   <>
                     <div className="flex justify-between text-sm c-text-3 px-1">
-                      <span>Total apostado</span><span className="font-bold c-text-1">{totalSlipStake} fichas</span>
+                      <span>Total apostado</span><span className="font-bold c-text-1">{totalSlipStake.toFixed(2)} fichas</span>
                     </div>
                     <div className="flex justify-between text-sm c-text-3 px-1">
-                      <span>Premio máximo</span><span className="font-bold c-text-green">{totalSlipPremio.toFixed(0)} fichas</span>
+                      <span>Premio máximo total</span><span className="font-bold c-text-green">{totalSlipPremio.toFixed(2)} fichas</span>
                     </div>
                   </>
                 )}
@@ -2228,7 +2257,7 @@ export default function CasaApuestasPingpong() {
               <div className="font-bold c-text-1">Historial exportado</div>
               <button onClick={() => setCsvVisible(null)} className="c-text-2"><X size={18} /></button>
             </div>
-            <div className="text-xs c-text-2">Se ha intentado descargar el archivo. Si tu navegador no lo ha permitido, copia el texto de abajo y pégalo en Excel, Sheets o Notas.</div>
+            <div className="text-xs c-text-2">Copia el texto de abajo y pégalo en Excel o Notas.</div>
             <textarea readOnly value={csvVisible} onClick={(e) => e.target.select()} className="w-full h-40 rounded-lg border c-bd-1 c-bg-app p-2 text-[11px] c-text-1" style={{ fontFamily: "'Space Mono', monospace" }} />
             <button onClick={copiarCSV} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
               {csvCopiado ? "✓ Copiado" : "📋 Copiar todo"}
@@ -2242,9 +2271,9 @@ export default function CasaApuestasPingpong() {
           <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
             <div className="flex justify-between items-start">
               <div>
-                <div className="text-[10px] uppercase font-bold c-text-2">Cuota mejorada</div>
+                <div className="text-[10px] uppercase font-bold c-text-2">Ajustar cuota manual</div>
                 <div className="font-bold c-text-1">{editarCuotaObjetivo.etiqueta}</div>
-                <div className="text-xs c-text-2">Cuota calculada: {editarCuotaObjetivo.valorBase.toFixed(2)}</div>
+                <div className="text-xs c-text-2">Cuota original: {editarCuotaObjetivo.valorBase.toFixed(2)}</div>
               </div>
               <button onClick={() => setEditarCuotaObjetivo(null)} className="c-text-2"><X size={18} /></button>
             </div>
@@ -2257,9 +2286,39 @@ export default function CasaApuestasPingpong() {
             <div className="flex gap-2">
               <button onClick={guardarCuotaEditada} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm">Guardar</button>
               {boostDe(partido, editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion) && (
-                <button onClick={quitarCuotaEditada} className="flex-1 rounded-lg border c-bd-1 c-text-2 font-bold py-2 text-sm">Quitar</button>
+                <button onClick={quitarCuotaEditada} className="flex-1 rounded-lg border c-bd-1 c-text-2 font-bold py-2 text-sm">Restaurar</button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PARA AÑADIR NUEVO MERCADO LIBRE */}
+      {modalNuevoMercado && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalNuevoMercado(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1">
+            <div className="flex justify-between items-center">
+              <div className="font-bold c-text-1">Añadir mercado personalizado</div>
+              <button onClick={() => setModalNuevoMercado(false)} className="c-text-2"><X size={18} /></button>
+            </div>
+            <div className="space-y-2">
+              <div>
+                <label className="text-xs c-text-2">Nombre del mercado (ej. ¿Habrá racha?, Saques directos)</label>
+                <input value={nombreMercadoCustom} onChange={(e) => setNombreMercadoCustom(e.target.value)} placeholder="Ej. Saques directos de Jorge" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+              </div>
+              <div>
+                <label className="text-xs c-text-2">Selección o opción (ej. Más de 3)</label>
+                <input value={seleccionMercadoCustom} onChange={(e) => setSeleccionMercadoCustom(e.target.value)} placeholder="Ej. Sí / Más de 3" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+              </div>
+              <div>
+                <label className="text-xs c-text-2">Cuota (ej. 2.50)</label>
+                <input inputMode="decimal" value={cuotaMercadoCustom} onChange={(e) => setCuotaMercadoCustom(e.target.value)} placeholder="2.50" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+              </div>
+            </div>
+            {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
+            <button onClick={crearMercadoCustom} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
+              Publicar mercado en mesa
+            </button>
           </div>
         </div>
       )}
