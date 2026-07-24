@@ -45,13 +45,8 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
 
   const ganador = { A: cuota(pA, margen), B: cuota(pB, margen), pA, pB };
 
-
-
-
   const perdedorEsperadoA = perdedorEsperadoJugador(historial, nombreA, perdedorEsperado);
   const perdedorEsperadoB = perdedorEsperadoJugador(historial, nombreB, perdedorEsperado);
-
-
 
   const handicaps = [3, 6, 10].map((k) => cuotaHandicap(pA, pB, perdedorEsperadoB, perdedorEsperadoA, margen, k));
 
@@ -59,12 +54,6 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const esperadoB = pB * 21 + (1 - pB) * perdedorEsperadoB;
   const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
   const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
-
-
-
-
-
-
 
   const probParcialesTeo = normCDF(2.5, perdedorEsperado, SD_PUNTOS);
   const probAjustadoTeo = Math.max(0, normCDF(20.5, perdedorEsperado, SD_PUNTOS) - normCDF(19.5, perdedorEsperado, SD_PUNTOS));
@@ -172,8 +161,6 @@ function probSuperaLinea(pWin, perdedorEsperado, linea) {
     const pSiPierde = 1 - normCDF(linea, perdedorEsperado, SD_PUNTOS);
     return pWin * 1 + (1 - pWin) * pSiPierde;
   }
-
-
   const pSiGana = 1 - normCDF(linea, 21, SD_PUNTOS);
   const pSiPierde = 1 - normCDF(linea, perdedorEsperado, SD_PUNTOS);
   return pWin * pSiGana + (1 - pWin) * pSiPierde;
@@ -221,9 +208,6 @@ function rangoPuntosSensato(historial, nombre) {
   const maxObs = Math.max(...puntos);
   let min = Math.max(3, minObs - 2);
   let max = Math.min(20, maxObs + 1);
-
-
-
   const ANCHURA_MINIMA = 11;
   if (max - min < ANCHURA_MINIMA) {
     const centro = (max + min) / 2;
@@ -296,20 +280,10 @@ function sonContradictorias(a, b) {
   const ib = extraerInfoSeleccion(b.mercado, b.seleccion);
   const esGanaOHandicap = (info) => info.tipo === "ganador" || info.tipo === "handicap";
 
-
-
-
-
   if (esGanaOHandicap(ia) && esGanaOHandicap(ib)) return true;
-
-
-
 
   if (esGanaOHandicap(ia) && ib.tipo === "puntos" && ib.jugador === ia.jugador) return true;
   if (esGanaOHandicap(ib) && ia.tipo === "puntos" && ia.jugador === ib.jugador) return true;
-
-
-
 
   if (ia.tipo === "puntos" && ib.tipo === "puntos" && ia.jugador === ib.jugador) {
     if (ia.seleccion === ib.seleccion) return true;
@@ -324,9 +298,6 @@ function sonContradictorias(a, b) {
   const ajustado = par.find((x) => x.tipo === "comoTermina" && x.opcion === "ajustado");
   const handicap3 = par.find((x) => x.tipo === "handicap" && x.k >= 3);
   if (ajustado && handicap3) return true;
-
-
-
 
   const normal = par.find((x) => x.tipo === "comoTermina" && x.opcion === "normal");
   const handicap19 = par.find((x) => x.tipo === "handicap" && x.k >= 19);
@@ -398,9 +369,6 @@ function probabilidadYDetalle(historialPrevio, nombreA, nombreB, ratingA, rating
   const pAdjA = Math.min(1 - EPS, Math.max(EPS, pEloBase + efA.total));
   const pAdjB = Math.min(1 - EPS, Math.max(EPS, (1 - pEloBase) + efB.total));
   let pA = pAdjA / (pAdjA + pAdjB);
-
-
-
   pA = Math.min(1 - EPS, Math.max(EPS, pA + efH2H.efecto));
   return { pA, pB: 1 - pA, detalleA: efA.detalle, detalleB: efB.detalle, h2h: efH2H };
 }
@@ -431,8 +399,6 @@ function efectoH2H(registrosH2H, nombreA, nombreB) {
   const n = regs.length;
   const victorias = regs.filter((r) => r.gano).length;
   const mediaResiduo = regs.reduce((s, r) => s + ((r.gano ? 1 : 0) - r.pElo), 0) / n;
-
-
   const atenuado = mediaResiduo * (n / (n + 2.5));
   const acotado = Math.max(-TOPE_H2H, Math.min(TOPE_H2H, atenuado));
   return { efecto: acotado, n, victorias };
@@ -638,7 +604,6 @@ const HISTORIAL_REAL = [
     hora: "20:10", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
   { teamA: ["Daniel", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 17, pb: 21, esGM: false,
     hora: "20:20", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
-
   { teamA: ["Alberto"], teamB: ["Álvaro"], pa: 19, pb: 21, esGM: false,
     hora: "14:00", ladoA: "Canasta", ladoB: "Columpios", solLado: null, viento: true },
   { teamA: ["Pedro"], teamB: ["Álvaro"], pa: 18, pb: 21, esGM: false,
@@ -661,7 +626,6 @@ const HISTORIAL_REAL = [
     hora: "19:20", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
   { teamA: ["Javier"], teamB: ["Nicolás"], pa: 21, pb: 12, esGM: true,
     hora: "19:20", ladoA: "Columpios", ladoB: "Canasta", solLado: null, viento: true },
-
   { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 16, esGM: false,
     hora: "18:30", ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", viento: false },
   { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 19, esGM: false,
@@ -898,7 +862,6 @@ function CondicionesBadges({ hora, ladoA, ladoB, solLado, viento, nombreA, nombr
   );
 }
 
-/* Ticket de apuesta múltiple */
 function TicketApuesta({ bettor, apuestas, onCerrar }) {
   const total = apuestas.reduce((s, a) => s + a.stake, 0);
   const premio = apuestas.reduce((s, a) => s + a.stake * a.cuota, 0);
@@ -1098,15 +1061,18 @@ export default function CasaApuestasPingpong() {
   const [error, setError] = useState("");
   const [celebracion, setCelebracion] = useState(null);
   const [confirmBorrar, setConfirmBorrar] = useState(false);
-  const [modoEspectador, setModoEspectador] = useState(false);
+  
+  // INICIAMOS MODO ESPECTADOR POR DEFECTO
+  const [modoEspectador, setModoEspectador] = useState(true); 
+  
   const [pidiendoPassword, setPidiendoPassword] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [csvVisible, setCsvVisible] = useState(null);
   const [csvCopiado, setCsvCopiado] = useState(false);
   const [fabPop, setFabPop] = useState(false);
-  const [perfilAbierto, setPerfilAbierto] = useState(null); // nombre del jugador cuyo perfil se está viendo
+  const [perfilAbierto, setPerfilAbierto] = useState(null);
   const [modoEditarCuotas, setModoEditarCuotas] = useState(false);
-  const [editarCuotaObjetivo, setEditarCuotaObjetivo] = useState(null); // { mercado, seleccion, valorBase, etiqueta }
+  const [editarCuotaObjetivo, setEditarCuotaObjetivo] = useState(null);
   const [editarCuotaInput, setEditarCuotaInput] = useState("");
   const prevSlipLen = useRef(0);
 
@@ -1158,6 +1124,7 @@ export default function CasaApuestasPingpong() {
     persistir({ ...estado, gm: nombre });
   }
 
+  // CONTRASEÑA PARA MODO BOSS
   const PASSWORD_BOSS = "123457";
 
   function pedirModoBoss() {
@@ -1183,8 +1150,6 @@ export default function CasaApuestasPingpong() {
 
   function exportarHistorial() {
     const csv = historialACSV(estado.historial);
-    // La descarga automática puede estar bloqueada dentro del artefacto (entorno
-    // aislado), así que la intentamos mostrando el texto para copiar en cualquier caso.
     try { descargarCSV(csv, "pinamax_historial.csv"); } catch (e) {  }
     setCsvCopiado(false);
     setCsvVisible(csv);
@@ -1235,8 +1200,11 @@ export default function CasaApuestasPingpong() {
 
   function guardarCuotaEditada() {
     const { mercado, seleccion } = editarCuotaObjetivo;
-    const val = editarCuotaInput.trim() ? Number(editarCuotaInput) : null;
-    if (editarCuotaInput.trim() && (!val || val < 1.01)) {
+    // CONVERTIMOS LA COMA A PUNTO PARA QUE FUNCIONE SIEMPRE
+    const valorLimpio = editarCuotaInput.trim().replace(',', '.');
+    const val = valorLimpio ? Number(valorLimpio) : null;
+    
+    if (valorLimpio && (!val || val < 1.01)) {
       setError("La cuota mejorada tiene que ser un número válido de al menos 1.01.");
       return;
     }
@@ -1257,9 +1225,6 @@ export default function CasaApuestasPingpong() {
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
   }
-
-  // Punto único por el que pasa cualquier toque a una cuota: si estamos en modo
-  // "editar cuotas" (solo disponible en modo boss) abre el editor de esa
 
   function manejarClicCuota(mercado, seleccion, valorBase, etiqueta) {
     if (modoEditarCuotas && !modoEspectador) {
@@ -1376,7 +1341,6 @@ export default function CasaApuestasPingpong() {
       historial: [partidoCerrado, ...estado.historial],
     });
 
-
     setHistPa(""); setHistPb(""); setHistHora(""); setHistEsGM(false);
   }
 
@@ -1435,6 +1399,43 @@ export default function CasaApuestasPingpong() {
     setMarcador({ a: "", b: "" });
   }
 
+  // FUNCIÓN PARA ELIMINAR PARTIDO Y DESHACER CAMBIOS SI ES EL ÚLTIMO
+  function eliminarPartidoHistorial(idPartido) {
+    const partidoABorrar = estado.historial.find(p => p.id === idPartido);
+    if (!partidoABorrar) return;
+
+    if (window.confirm("¿Seguro que quieres borrar este partido del historial? Si es el último que se ha jugado, se devolverá el dinero apostado y se restaurará el ELO automáticamente.")) {
+      const nuevoHistorial = estado.historial.filter((p) => p.id !== idPartido);
+      let nuevosJugadores = { ...estado.jugadores };
+      let nuevosBettors = { ...estado.bettors };
+
+      // Si es el partido más reciente (índice 0), revertimos con precisión quirúrgica
+      if (estado.historial[0].id === idPartido) {
+        if (partidoABorrar.ratingsAntes) {
+          Object.entries(partidoABorrar.ratingsAntes).forEach(([jugador, eloAnterior]) => {
+            nuevosJugadores[jugador] = eloAnterior;
+          });
+        }
+        if (partidoABorrar.apuestas) {
+          partidoABorrar.apuestas.forEach(ap => {
+             if (ap.estado === "ganada") {
+                nuevosBettors[ap.bettor] = (nuevosBettors[ap.bettor] || 0) - (ap.stake * ap.cuota) + ap.stake;
+             } else if (ap.estado === "perdida") {
+                nuevosBettors[ap.bettor] = (nuevosBettors[ap.bettor] || 0) + ap.stake;
+             }
+          });
+        }
+      }
+
+      persistir({
+        ...estado,
+        historial: nuevoHistorial,
+        jugadores: nuevosJugadores,
+        bettors: nuevosBettors
+      });
+    }
+  }
+
   async function borrarTodo() {
     await persistir(ESTADO_DEFECTO);
     setConfirmBorrar(false);
@@ -1447,8 +1448,7 @@ export default function CasaApuestasPingpong() {
   const stakeGanadorA = partido ? sumaStakeGanador(partido.apuestas, partido.a) : 0;
   const stakeGanadorB = partido ? sumaStakeGanador(partido.apuestas, partido.b) : 0;
   const ganadorConDinero = mercados ? cuotaGanadorConDinero(mercados.ganador.pA, estado.margen, stakeGanadorA, stakeGanadorB) : null;
-  // Combina la cuota base (con autobalanceo por dinero) con el boost manual si
-  // existe, para CUALQUIER mercado — no solo Ganador.
+  
   const conBoost = (mercado, seleccion, base) => {
     const b = partido ? boostDe(partido, mercado, seleccion) : null;
     return { valor: b ?? base, base, boosteado: b != null };
@@ -1469,7 +1469,6 @@ export default function CasaApuestasPingpong() {
   const variacionA0 = puntosAVivo ? ladoConSentido(puntosAVivo.cuotaMas, puntosAVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const variacionB0 = puntosBVivo ? ladoConSentido(puntosBVivo.cuotaMas, puntosBVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const handicapLados0 = handicapVivo ? ladoConSentido(handicapVivo.cuotaA, handicapVivo.cuotaB) : { mostrarMas: true, mostrarMenos: true };
-
 
   const variacionA = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : variacionA0;
   const variacionB = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : variacionB0;
@@ -2040,7 +2039,18 @@ export default function CasaApuestasPingpong() {
                 const fechaStr = fechaObj.toLocaleDateString("es-ES", { day: "2-digit", month: "short" });
                 const horaStr = p.hora || fechaObj.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
                 return (
-                  <Panel key={p.id} icon={History} titulo={`${fechaStr} · ${horaStr}`}>
+                  <Panel 
+                    key={p.id} 
+                    icon={History} 
+                    titulo={`${fechaStr} · ${horaStr}`}
+                    badge={
+                      !modoEspectador && (
+                        <button onClick={() => eliminarPartidoHistorial(p.id)} className="text-xs c-text-red2 underline font-bold active:scale-95 transition-transform">
+                          Borrar
+                        </button>
+                      )
+                    }
+                  >
                     {p.titular && <p style={{ fontFamily: "'Caveat', cursive" }} className="text-lg c-text-mesa font-bold leading-tight">"{p.titular}"</p>}
                     <div style={{ fontFamily: "'Bebas Neue', sans-serif" }} className="text-lg tracking-wide c-text-1 flex items-center gap-2 flex-wrap">
                       {p.aLabel} <span className={p.ganador === p.aLabel ? "c-text-green" : "c-text-red2"}>{p.pa}</span> – <span className={p.ganador === p.bLabel ? "c-text-green" : "c-text-red2"}>{p.pb}</span> {p.bLabel} {p.esGM && "👑"}
