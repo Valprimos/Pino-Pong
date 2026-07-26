@@ -60,7 +60,8 @@ function calcularTerminales(pA) {
 function probDesdeTerminales(terminales, a, b) {
   const match = terminales.find(t => t.a === a && t.b === b);
   if (!match) return 0;
-  return match.p * 0.85 + 0.005; 
+  // Se sube artificialmente la base de probabilidad para que la cuota final baje y no sea tan exagerada
+  return Math.min(0.98, (match.p * 1.8) + 0.08); 
 }
 
 function probPuntosIndividual(terminales, pts, isA) {
@@ -70,7 +71,8 @@ function probPuntosIndividual(terminales, pts, isA) {
       if (!isA && t.b === pts) sum += t.p;
   });
   if (sum === 0) return 0;
-  return sum * 0.85 + 0.005; 
+  // Se sube artificialmente la base para que la cuota final sea más conservadora
+  return Math.min(0.98, (sum * 1.8) + 0.08); 
 }
 
 function cuota(p, margen) {
@@ -99,16 +101,22 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
 
   let probParciales = 0;
   let probAjustado = 0;
+  let probNormal = 0;
+  
   terminales.forEach(t => {
-      if (isParcial(t.a, t.b)) probParciales += t.p;
-      else if (t.a >= 22 || t.b >= 22) probAjustado += t.p;
+      if (isParcial(t.a, t.b)) {
+          probParciales += t.p;
+      } else if (t.a >= 22 || t.b >= 22) {
+          probAjustado += t.p;
+      } else if ((t.a === 21 && t.b >= 3 && t.b <= 19) || (t.b === 21 && t.a >= 3 && t.a <= 19)) {
+          probNormal += t.p;
+      }
   });
-  const probNormal = Math.max(0.01, 1 - probParciales - probAjustado);
 
   const comoTermina = {
-    parciales: cuota(probParciales * 0.85 + 0.02, margen),
+    parciales: cuota(probParciales * 1.1 + 0.02, margen),
     normal: cuota(probNormal, margen),
-    ajustado: cuota(probAjustado * 0.85 + 0.02, margen),
+    ajustado: cuota(probAjustado * 1.1 + 0.02, margen),
   };
 
   const resultadosExactos = [
@@ -301,18 +309,15 @@ function evaluarPata(mercado, seleccion, ctx, customResults = {}) {
   return false;
 }
 
-// MOTOR MATEMÁTICO: Evaluador lógico de contradicciones e implicaciones (SGP)
 function sonContradictorias(a, b, partido) {
   if (!partido) return false;
 
-  // Los mercados personalizados creados por el Boss escapan de la matemática estricta
   const isCustom = (m) => !["Ganador", "Resultado Exacto Partido", "Cómo termina"].includes(m) && !m.startsWith("Puntos Exactos") && !m.startsWith("Hándicap") && !m.startsWith("Puntos ");
   if (isCustom(a.mercado) || isCustom(b.mercado)) {
       if (a.mercado === b.mercado && a.seleccion !== b.seleccion) return true;
       return false;
   }
 
-  // Simulamos TODOS los resultados posibles de pingpong para ver si chocan
   const allResultados = [];
   for(let pa=0; pa<=35; pa++){
     for(let pb=0; pb<=35; pb++){
@@ -332,13 +337,8 @@ function sonContradictorias(a, b, partido) {
     if (w1 && w2) vecesGananAmbas++;
   }
 
-  // 1. Contradicción pura: Nunca se dan juntas en ningún universo posible.
   if (vecesGananAmbas === 0) return true; 
-
-  // 2. Redundancia / Implicación: Matemática pura. Si un resultado ya obliga al otro, es redundante.
   if (vecesGananAmbas === vecesGanaA || vecesGananAmbas === vecesGanaB) return true;
-
-  // Si pasa ambos filtros, significa que se solapan pero ninguna obliga a la otra. ¡Se pueden combinar!
   return false;
 }
 
@@ -420,10 +420,10 @@ function construirRegistrosH2H(historial) {
     const ganoA = p.pa > p.pb;
     if (!registros[a]) registros[a] = {};
     if (!registros[a][b]) registros[a][b] = [];
-    registros[a][b].push({ gano: ganoA, pElo: pEloA });
+    registros[a][b].push({ gano: ganoA, pElo: pEloA, partido: p });
     if (!registros[b]) registros[b] = {};
     if (!registros[b][a]) registros[b][a] = [];
-    registros[b][a].push({ gano: !ganoA, pElo: 1 - pEloA });
+    registros[b][a].push({ gano: !ganoA, pElo: 1 - pEloA, partido: p });
   });
   return registros;
 }
@@ -465,7 +465,11 @@ function construirPerfilJugador(historial, nombre) {
   const registrosH2H = construirRegistrosH2H(historial);
   const h2h = {};
   Object.entries(registrosH2H[nombre] || {}).forEach(([rival, list]) => {
-    h2h[rival] = { n: list.length, victorias: list.filter((r) => r.gano).length };
+    h2h[rival] = { 
+      n: list.length, 
+      victorias: list.filter((r) => r.gano).length,
+      partidos: list.map(r => r.partido)
+    };
   });
 
   const partidos = historial.filter((p) => p.teamA && p.teamB && (p.teamA.includes(nombre) || p.teamB.includes(nombre)));
@@ -981,8 +985,10 @@ function FilaRecord({ etiqueta, d }) {
   );
 }
 
-function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
+function ModalPerfil({ nombre, perfil, rating, onCerrar, modoEspectador, onEliminar }) {
   const rivales = Object.entries(perfil.h2h).sort((a, b) => b[1].n - a[1].n);
+  const [h2hExpandido, setH2hExpandido] = useState(null);
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50" onClick={onCerrar}>
       <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-md space-y-3 border c-bd-1 c-maxh-80vh overflow-y-auto">
@@ -1020,7 +1026,30 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
           {rivales.length === 0 ? (
             <p className="text-sm c-text-2">Todavía no se ha cruzado con nadie.</p>
           ) : (
-            rivales.map(([rival, d]) => <FilaRecord key={rival} etiqueta={`vs ${rival}`} d={d} />)
+            <div className="space-y-1.5">
+              {rivales.map(([rival, d]) => (
+                <div key={rival} className="border c-bd-2 rounded-lg bg-white overflow-hidden">
+                   <div
+                     className="flex justify-between text-sm p-2 cursor-pointer hover:bg-gray-50 active:scale-[0.99] transition-all"
+                     onClick={() => setH2hExpandido(h2hExpandido === rival ? null : rival)}
+                   >
+                     <span className="c-text-2 font-semibold">vs {rival}</span>
+                     <span className="font-mono font-bold c-text-1">{d.victorias}V-{d.n - d.victorias}D <span className="font-normal text-xs c-text-2">({Math.round((100 * d.victorias) / d.n)}%)</span></span>
+                   </div>
+                   {h2hExpandido === rival && (
+                      <div className="px-2 pb-2 space-y-1 bg-gray-50 border-t c-bd-2 pt-2">
+                         {d.partidos.length === 0 ? <span className="text-xs c-text-3">Sin registro detallado</span> : null}
+                         {d.partidos.map(p => (
+                            <div key={p.id} className="text-[11px] flex justify-between c-text-3 border-b c-bd-1-60 last:border-0 pb-1 mb-1 last:pb-0 last:mb-0">
+                               <span>{new Date(p.fecha).toLocaleDateString("es-ES", { day: "2-digit", month: "short" })} · {p.aLabel} <span className={p.pa > p.pb ? "font-bold" : ""}>{p.pa}</span>-<span className={p.pb > p.pa ? "font-bold" : ""}>{p.pb}</span> {p.bLabel}</span>
+                               <span className={p.ganador === nombre ? "c-text-green font-bold" : "c-text-red2 font-bold"}>{p.ganador === nombre ? "W" : "L"}</span>
+                            </div>
+                         ))}
+                      </div>
+                   )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
@@ -1028,12 +1057,18 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
           <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
             <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Últimos partidos</div>
             {perfil.ultimos.map((p) => (
-              <div key={p.id} className="text-xs flex justify-between c-text-2">
+              <div key={p.id} className="text-xs flex justify-between c-text-2 border-b c-bd-1-60 last:border-0 pb-1 last:pb-0">
                 <span>{p.aLabel} {p.pa} – {p.pb} {p.bLabel}</span>
                 <span className={p.ganador === nombre ? "c-text-green font-bold" : "c-text-red2 font-bold"}>{p.ganador === nombre ? "Ganó" : "Perdió"}</span>
               </div>
             ))}
           </div>
+        )}
+
+        {!modoEspectador && (
+          <button onClick={() => onEliminar(nombre)} className="w-full rounded-lg border c-bd-red-40 c-text-red2 font-bold py-2 mt-4 text-sm bg-red-50 hover:bg-red-100 active:scale-95 transition-transform">
+            Eliminar Cuenta Permanentemente
+          </button>
         )}
       </div>
     </div>
@@ -1060,6 +1095,7 @@ export default function CasaApuestasPingpong() {
   const [vientoInput, setVientoInput] = useState(false);
   const [slip, setSlip] = useState([]);
   const [slipOpen, setSlipOpen] = useState(false);
+  const [slipError, setSlipError] = useState("");
   const [bettorSlip, setBettorSlip] = useState("");
   const [modoSlip, setModoSlip] = useState("simples");
   const [stakeCombinada, setStakeCombinada] = useState("50");
@@ -1093,6 +1129,11 @@ export default function CasaApuestasPingpong() {
   const [cuotaMercadoCustom, setCuotaMercadoCustom] = useState("");
 
   const [resolviendoCustoms, setResolviendoCustoms] = useState(null);
+
+  // Estados para acciones protegidas por contraseña (Borrar cuenta / Anular apuesta)
+  const [accionProtegida, setAccionProtegida] = useState(null);
+  const [pwdProtegida, setPwdProtegida] = useState("");
+  const [errProtegida, setErrProtegida] = useState("");
 
   const prevSlipLen = useRef(0);
 
@@ -1173,7 +1214,7 @@ export default function CasaApuestasPingpong() {
     const nombre = nuevoJugador.trim();
     if (!nombre) return;
     if (estado.jugadores[nombre] !== undefined) { setNuevoJugador(""); return; }
-    persistir({ ...estado, jugadores: { ...estado.jugadores, [nombre]: RATING_INICIAL } });
+    persistir({ ...estado, jugadores: { ...estado.jugadores, [nombre]: RATING_INICIAL }, bettors: { ...estado.bettors, [nombre]: 500 } });
     setNuevoJugador("");
   }
 
@@ -1202,6 +1243,60 @@ export default function CasaApuestasPingpong() {
 
   function pasarAEspectador() {
     setModoEspectador(true);
+  }
+
+  function solicitarAccionProtegida(tipo, payload) {
+    setAccionProtegida({ tipo, payload });
+    setPwdProtegida("");
+    setErrProtegida("");
+  }
+
+  function ejecutarAccionProtegida() {
+    if (pwdProtegida !== PASSWORD_BOSS) {
+      setErrProtegida("Contraseña incorrecta.");
+      return;
+    }
+    if (accionProtegida.tipo === 'anular_apuesta') {
+      realizarAnulacionApuesta(accionProtegida.payload);
+    } else if (accionProtegida.tipo === 'eliminar_cuenta') {
+      realizarEliminacionCuenta(accionProtegida.payload);
+    }
+    setAccionProtegida(null);
+  }
+
+  function realizarAnulacionApuesta(idApuesta) {
+    const ap = partido.apuestas.find(a => a.id === idApuesta);
+    if (!ap) return;
+    const nuevosBettors = {...estado.bettors};
+    if (ap.estado === "pendiente") {
+      nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
+    }
+    const nuevoPartido = {...partido, apuestas: partido.apuestas.filter(a => a.id !== idApuesta)};
+    persistir({...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido});
+  }
+
+  function realizarEliminacionCuenta(nombre) {
+    const nuevosJugadores = { ...estado.jugadores };
+    delete nuevosJugadores[nombre];
+
+    const nuevosBettors = { ...estado.bettors };
+    delete nuevosBettors[nombre];
+
+    const nuevosVetados = (estado.vetados || []).filter(n => n !== nombre);
+    
+    let gmNuevo = estado.gm === nombre ? null : estado.gm;
+    let pendienteNuevo = estado.pendiente === nombre ? null : estado.pendiente;
+
+    persistir({
+      ...estado,
+      jugadores: nuevosJugadores,
+      bettors: nuevosBettors,
+      vetados: nuevosVetados,
+      gm: gmNuevo,
+      pendiente: pendienteNuevo
+    });
+
+    setPerfilAbierto(null);
   }
 
   function exportarHistorial() {
@@ -1328,11 +1423,12 @@ export default function CasaApuestasPingpong() {
     const conflicto = slip.find((s) => sonContradictorias(s, nuevaSel, partido));
     
     if (conflicto) {
-      setError(`"${seleccion}" (en ${mercado}) entra en conflicto lógico con "${conflicto.seleccion}" (en ${conflicto.mercado}). Son apuestas contradictorias o redundantes.`);
+      setError(`"${seleccion}" entra en conflicto lógico con "${conflicto.seleccion}". Son apuestas contradictorias o redundantes.`);
       return;
     }
 
     setError("");
+    setSlipError("");
     setSlip([...slip, { id: Date.now() + Math.random(), mercado, seleccion, cuota: Number(cuota.toFixed(2)), stake: 50 }]);
   }
 
@@ -1345,12 +1441,13 @@ export default function CasaApuestasPingpong() {
   }
 
   function confirmarSlip() {
+    setSlipError("");
     const nombre = bettorSlip.trim();
-    if (!nombre) { setError("Pon el nombre de quién apuesta."); return; }
-    if (estado.vetados?.includes(nombre)) { setError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
+    if (!nombre) { setSlipError("Escribe el nombre de quién hace la apuesta."); return; }
+    if (estado.vetados?.includes(nombre)) { setSlipError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
     
     const hasLocked = slip.some(s => boostDe(partido, s.mercado, s.seleccion) === "LOCKED");
-    if (hasLocked) { setError("Una de las cuotas de tu cesta acaba de ser bloqueada por la casa. Quítala para continuar."); return; }
+    if (hasLocked) { setSlipError("Una de las cuotas de tu cesta acaba de ser bloqueada por la casa. Quítala para continuar."); return; }
 
     const saldoActual = estado.bettors[nombre] ?? 500;
     const rachaApostante = calcularRachaApuestas(estado.historial, nombre);
@@ -1358,10 +1455,10 @@ export default function CasaApuestasPingpong() {
 
     if (modoSlip === "combinada" && slip.length >= 2) {
       const stakeVal = Number(stakeCombinada.replace(',', '.')) || 0;
-      if (stakeVal <= 0) { setError("Pon una cantidad de fichas válida."); return; }
-      if (saldoActual < stakeVal) { setError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas.`); return; }
+      if (stakeVal <= 0) { setSlipError("Pon una cantidad de fichas válida."); return; }
+      if (saldoActual < stakeVal) { setSlipError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas.`); return; }
       const cuotaTotal = Math.max(1.01, Number((slip.reduce((acc, s) => acc * s.cuota, 1) * bonus).toFixed(2)));
-      setError("");
+      
       const apuesta = {
         id: Date.now(), bettor: nombre, tipo: "combinada",
         patas: slip.map((s) => ({ mercado: s.mercado, seleccion: s.seleccion, cuota: Number(s.cuota.toFixed(2)), boosteada: typeof boostDe(partido, s.mercado, s.seleccion) === "number" && boostDe(partido, s.mercado, s.seleccion) > s.cuota })),
@@ -1379,9 +1476,9 @@ export default function CasaApuestasPingpong() {
     }
 
     const totalStake = slip.reduce((s, x) => s + x.stake, 0);
-    if (slip.some((s) => !s.stake || s.stake <= 0)) { setError("Todas las apuestas necesitan una cantidad de fichas."); return; }
-    if (saldoActual < totalStake) { setError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas y esta cesta suma ${totalStake.toFixed(2)}.`); return; }
-    setError("");
+    if (slip.some((s) => !s.stake || s.stake <= 0)) { setSlipError("Todas las apuestas necesitan una cantidad de fichas."); return; }
+    if (saldoActual < totalStake) { setSlipError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas y esta cesta suma ${totalStake.toFixed(2)}.`); return; }
+    
     const nuevasApuestas = slip.map((s) => {
       const cuotaFinalCalc = Number((s.cuota * bonus).toFixed(2));
       const bOriginal = boostDe(partido, s.mercado, s.seleccion);
@@ -1431,16 +1528,6 @@ export default function CasaApuestasPingpong() {
     const vetados = estado.vetados || [];
     if (vetados.includes(nombre)) persistir({...estado, vetados: vetados.filter(n => n !== nombre)});
     else persistir({...estado, vetados: [...vetados, nombre]});
-  }
-
-  function anularApuesta(idApuesta) {
-    if (!window.confirm("¿Seguro que quieres anular esta apuesta y devolver las fichas?")) return;
-    const ap = partido.apuestas.find(a => a.id === idApuesta);
-    if (!ap) return;
-    const nuevosBettors = {...estado.bettors};
-    nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
-    const nuevoPartido = {...partido, apuestas: partido.apuestas.filter(a => a.id !== idApuesta)};
-    persistir({...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido});
   }
 
   function iniciarCierrePartido() {
@@ -2073,7 +2160,7 @@ export default function CasaApuestasPingpong() {
                       <div className="flex items-center gap-2">
                         <span className="font-mono font-bold c-text-orange shrink-0">{ap.stake.toFixed(2)} × {ap.cuota.toFixed(2)}</span>
                         {!modoEspectador && (
-                           <button onClick={() => anularApuesta(ap.id)} className="c-text-red2 hover:c-bg-red-soft p-1 rounded transition-colors" title="Anular apuesta">
+                           <button onClick={() => solicitarAccionProtegida("anular_apuesta", ap.id)} className="c-text-red2 hover:c-bg-red-soft p-1 rounded transition-colors" title="Anular apuesta">
                               <Trash2 size={14} />
                            </button>
                         )}
@@ -2309,6 +2396,13 @@ export default function CasaApuestasPingpong() {
               <div className="font-bold c-text-1 flex items-center gap-1.5"><Ticket size={16} className="c-text-orange" /> Cesta de apuestas</div>
               <button onClick={() => setSlipOpen(false)} className="c-text-2"><X size={18} /></button>
             </div>
+            
+            {slipError && (
+              <div className="text-xs bg-red-50 text-red-700 border border-red-200 rounded-lg p-2 font-medium">
+                {slipError}
+              </div>
+            )}
+
             {slip.length === 0 ? (
               <p className="text-sm c-text-2">La cesta está vacía.</p>
             ) : (
@@ -2399,6 +2493,8 @@ export default function CasaApuestasPingpong() {
           perfil={construirPerfilJugador(estado.historial, perfilAbierto)}
           rating={ratingDe(perfilAbierto)}
           onCerrar={() => setPerfilAbierto(null)}
+          modoEspectador={modoEspectador}
+          onEliminar={(nombre) => solicitarAccionProtegida('eliminar_cuenta', nombre)}
         />
       )}
 
@@ -2418,6 +2514,33 @@ export default function CasaApuestasPingpong() {
             <div className="flex gap-2 pt-1">
               <button onClick={() => setPidiendoPassword(false)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={confirmarPassword} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent py-2 text-sm font-bold">Entrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE ACCIONES PROTEGIDAS POR CONTRASEÑA */}
+      {accionProtegida && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setAccionProtegida(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 border-t-4 border-t-red-600">
+            <div className="font-bold c-text-1 text-lg flex items-center gap-2">
+              <Lock size={18} className="c-text-red2" /> Acción Peligrosa
+            </div>
+            <div className="text-sm c-text-2 leading-snug">
+              {accionProtegida.tipo === 'anular_apuesta' && "Vas a anular una apuesta en firme y devolver el dinero al jugador. Pon la clave de Boss."}
+              {accionProtegida.tipo === 'eliminar_cuenta' && `Vas a eliminar a ${accionProtegida.payload} del sistema (borrando su cuenta de apuestas y quitándolo del ranking). Pon la clave de Boss.`}
+            </div>
+            <input
+              type="password" inputMode="numeric" value={pwdProtegida}
+              onChange={(e) => setPwdProtegida(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") ejecutarAccionProtegida(); }}
+              placeholder="Contraseña (123457)" autoFocus
+              className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1"
+            />
+            {errProtegida && <div className="text-xs c-text-red2 font-semibold">{errProtegida}</div>}
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setAccionProtegida(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Atrás</button>
+              <button onClick={ejecutarAccionProtegida} className="flex-1 rounded-lg bg-red-600 text-white py-2 text-sm font-bold">Autorizar</button>
             </div>
           </div>
         </div>
@@ -2458,13 +2581,17 @@ export default function CasaApuestasPingpong() {
             {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
             <div className="flex gap-2">
               <button onClick={guardarCuotaEditada} disabled={editarCuotaObjetivo.isLocked} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm disabled:opacity-50">Guardar</button>
-              {boostDe(partido, editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion) && (
+              {boostDe(partido, editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion) && !editarCuotaObjetivo.isLocked && (
                 <button onClick={quitarCuotaEditada} className="flex-1 rounded-lg border c-bd-1 c-text-2 font-bold py-2 text-sm">Restaurar</button>
               )}
             </div>
-            {!editarCuotaObjetivo.isLocked && (
+            {!editarCuotaObjetivo.isLocked ? (
                <button onClick={bloquearCuota} className="w-full flex items-center justify-center gap-1 rounded-lg c-bg-red-soft c-text-red2 border c-bd-red-40 font-bold py-2 text-sm mt-2">
                  <Lock size={14} /> Bloquear Cuota
+               </button>
+            ) : (
+               <button onClick={quitarCuotaEditada} className="w-full flex items-center justify-center gap-1 rounded-lg c-bg-green-soft c-text-green-dark border c-bd-green-50 font-bold py-2 text-sm mt-2">
+                 🔓 Desbloquear Cuota
                </button>
             )}
           </div>
@@ -2515,15 +2642,15 @@ export default function CasaApuestasPingpong() {
                   const idCustom = `${c.mercado}||${c.seleccion}`;
                   const acertado = resolviendoCustoms.respuestas[idCustom] || false;
                   return (
-                     <div key={idCustom} className="p-3 rounded-lg c-bg-app border c-bd-1 flex items-center justify-between gap-3">
-                        <div className="text-sm font-semibold flex-1">
-                           {c.mercado}: <span className="c-text-orange">{c.seleccion}</span>
-                        </div>
-                        <div className="flex border c-bd-2 rounded-lg overflow-hidden shrink-0 font-bold text-xs">
-                           <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: true } })} className={`px-3 py-1.5 ${acertado ? "c-bg-green c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>SÍ</button>
-                           <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: false } })} className={`px-3 py-1.5 ${!acertado ? "c-bg-red c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>NO</button>
-                        </div>
-                     </div>
+                      <div key={idCustom} className="p-3 rounded-lg c-bg-app border c-bd-1 flex items-center justify-between gap-3">
+                         <div className="text-sm font-semibold flex-1">
+                            {c.mercado}: <span className="c-text-orange">{c.seleccion}</span>
+                         </div>
+                         <div className="flex border c-bd-2 rounded-lg overflow-hidden shrink-0 font-bold text-xs">
+                            <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: true } })} className={`px-3 py-1.5 ${acertado ? "c-bg-green c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>SÍ</button>
+                            <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: false } })} className={`px-3 py-1.5 ${!acertado ? "c-bg-red c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>NO</button>
+                         </div>
+                      </div>
                   );
                })}
             </div>
