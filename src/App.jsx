@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2 } from "lucide-react";
+import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2, Gift } from "lucide-react";
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
@@ -57,22 +57,31 @@ function calcularTerminales(pA) {
   return term;
 }
 
-function probDesdeTerminales(terminales, a, b) {
-  const match = terminales.find(t => t.a === a && t.b === b);
-  if (!match) return 0;
-  // Inflando probabilidad artificialmente para que las cuotas bajen a niveles realistas (partidos a 21)
-  return Math.min(0.98, (match.p * 5.0) + 0.05); 
-}
-
-function probPuntosIndividual(terminales, pts, isA) {
-  let sum = 0;
-  terminales.forEach(t => {
-      if (isA && t.a === pts) sum += t.p;
-      if (!isA && t.b === pts) sum += t.p;
+// NUEVO: Obtener tasas empíricas de cómo terminan los partidos basándose en el historial
+function getEmpiricalRates(historial, a, b) {
+  let p = 0, n = 0, aj = 0, total = 0;
+  // Buscamos partidos donde haya participado alguno de los dos (para tener volumen de datos)
+  const matches = historial.filter(m => (m.teamA?.includes(a) || m.teamB?.includes(a)) || (m.teamA?.includes(b) || m.teamB?.includes(b)));
+  
+  matches.forEach(m => {
+      if (isParcial(m.pa, m.pb)) p++;
+      else if (m.pa >= 22 || m.pb >= 22) aj++;
+      else n++;
+      total++;
   });
-  if (sum === 0) return 0;
-  // Inflando probabilidad artificialmente para que las cuotas bajen
-  return Math.min(0.98, (sum * 4.5) + 0.05); 
+  
+  // Añadimos "partidos fantasma" (Bayes prior) para que nunca sea 0% absoluto y el modelo sea robusto
+  // Asumimos un deporte donde normalmente el 83% es normal, 15% deuce, 2% parciales.
+  const priorP = 0.02 * 10;
+  const priorN = 0.83 * 10;
+  const priorAj = 0.15 * 10;
+  
+  const smoothTotal = total + 10;
+  return {
+      p: (p + priorP) / smoothTotal,
+      n: (n + priorN) / smoothTotal,
+      aj: (aj + priorAj) / smoothTotal,
+  };
 }
 
 function cuota(p, margen) {
@@ -87,7 +96,7 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const perdedorEsperado = Math.round(19 * closeness);
 
   const ganador = { A: cuota(pA, margen), B: cuota(pB, margen), pA, pB };
-  const terminales = calcularTerminales(pA);
+  let terminales = calcularTerminales(pA);
 
   const perdedorEsperadoA = perdedorEsperadoJugador(historial, nombreA, perdedorEsperado);
   const perdedorEsperadoB = perdedorEsperadoJugador(historial, nombreB, perdedorEsperado);
@@ -99,34 +108,50 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
   const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
 
+  // AJUSTE EMPÍRICO DE LOS ESCENARIOS TERMINALES (Para arreglar parciales vs normal)
+  const empRates = getEmpiricalRates(historial, nombreA, nombreB);
+  let dpP = 0, dpN = 0, dpAj = 0;
+  terminales.forEach(t => {
+      if (isParcial(t.a, t.b)) dpP += t.p;
+      else if (t.a >= 22 || t.b >= 22) dpAj += t.p;
+      else dpN += t.p;
+  });
+
+  // Re-escalamos las probabilidades matemáticas para que cuadren con la realidad histórica de los jugadores
+  let probSumaCheck = 0;
+  terminales.forEach(t => {
+      if (isParcial(t.a, t.b)) t.p = t.p * (empRates.p / (dpP || 1));
+      else if (t.a >= 22 || t.b >= 22) t.p = t.p * (empRates.aj / (dpAj || 1));
+      else t.p = t.p * (empRates.n / (dpN || 1));
+      probSumaCheck += t.p;
+  });
+
+  // Normalizamos de nuevo por si hubiera desajustes
+  terminales.forEach(t => { t.p = t.p / probSumaCheck; });
+
   let probParciales = 0;
   let probAjustado = 0;
   let probNormal = 0;
   
   terminales.forEach(t => {
-      if (isParcial(t.a, t.b)) {
-          probParciales += t.p;
-      } else if (t.a >= 22 || t.b >= 22) {
-          probAjustado += t.p;
-      } else if ((t.a === 21 && t.b >= 3 && t.b <= 19) || (t.b === 21 && t.a >= 3 && t.a <= 19)) {
-          probNormal += t.p;
-      }
+      if (isParcial(t.a, t.b)) probParciales += t.p;
+      else if (t.a >= 22 || t.b >= 22) probAjustado += t.p;
+      else probNormal += t.p;
   });
 
   const comoTermina = {
-    parciales: cuota(probParciales * 1.1 + 0.02, margen),
-    // Ajuste en la cuota de partido "normal" para que pague ligeramente mejor que 1.01 pero con sentido
-    normal: cuota(probNormal * 0.8 + 0.1, margen),
-    ajustado: cuota(probAjustado * 1.1 + 0.02, margen),
+    parciales: cuota(probParciales, margen),
+    normal: cuota(probNormal, margen),
+    ajustado: cuota(probAjustado, margen),
   };
 
   const resultadosExactos = [
-    { marcador: `21-12`, p: probDesdeTerminales(terminales, 21, 12) },
-    { marcador: `21-15`, p: probDesdeTerminales(terminales, 21, 15) },
-    { marcador: `21-19`, p: probDesdeTerminales(terminales, 21, 19) },
-    { marcador: `12-21`, p: probDesdeTerminales(terminales, 12, 21) },
-    { marcador: `15-21`, p: probDesdeTerminales(terminales, 15, 21) },
-    { marcador: `19-21`, p: probDesdeTerminales(terminales, 19, 21) },
+    { marcador: `21-12`, p: terminales.find(t => t.a === 21 && t.b === 12)?.p || 0 },
+    { marcador: `21-15`, p: terminales.find(t => t.a === 21 && t.b === 15)?.p || 0 },
+    { marcador: `21-19`, p: terminales.find(t => t.a === 21 && t.b === 19)?.p || 0 },
+    { marcador: `12-21`, p: terminales.find(t => t.a === 12 && t.b === 21)?.p || 0 },
+    { marcador: `15-21`, p: terminales.find(t => t.a === 15 && t.b === 21)?.p || 0 },
+    { marcador: `19-21`, p: terminales.find(t => t.a === 19 && t.b === 21)?.p || 0 },
   ].map(res => ({ marcador: res.marcador, cuota: cuota(res.p, margen) }));
 
   return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, resultadosExactos, terminales, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
@@ -333,7 +358,6 @@ function sonContradictorias(a, b, partido) {
     }
   }
   
-  // Si NUNCA ganan ambas juntas en ningún resultado posible del pingpong, son lógicamente contradictorias.
   return vecesGananAmbas === 0;
 }
 
@@ -356,7 +380,6 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
       
       if (probConjunta <= 0) probConjunta = 0.001;
       
-      // Limites lógicos para evitar cuotas astronómicas
       probConjunta = Math.max(0.005, probConjunta); 
       probConjunta = Math.min(0.98, probConjunta);
       
@@ -365,6 +388,36 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
   
   const cuotaCust = customLegs.reduce((a, b) => a * b.cuota, 1);
   return Math.max(1.01, cuotaStd * cuotaCust);
+}
+
+function calcularEstadisticasGlobales(historial) {
+  let canastaTotal = 0, columpiosTotal = 0;
+  const porJugador = {};
+
+  historial.forEach(m => {
+    if (!m.ladoA || !m.ladoB || !m.teamA || !m.teamB) return;
+    const aLabel = m.teamA[0];
+    const bLabel = m.teamB[0];
+    const ganador = m.ganador;
+    const ladoGanador = (aLabel === ganador) ? m.ladoA : m.ladoB;
+    
+    if (ladoGanador === "Canasta") canastaTotal++;
+    if (ladoGanador === "Columpios") columpiosTotal++;
+
+    if (!porJugador[aLabel]) porJugador[aLabel] = { c: 0, k: 0 }; // c: canasta, k: columpios
+    if (!porJugador[bLabel]) porJugador[bLabel] = { c: 0, k: 0 };
+    
+    if (aLabel === ganador) {
+      if (m.ladoA === "Canasta") porJugador[aLabel].c++;
+      else porJugador[aLabel].k++;
+    }
+    if (bLabel === ganador) {
+      if (m.ladoB === "Canasta") porJugador[bLabel].c++;
+      else porJugador[bLabel].k++;
+    }
+  });
+
+  return { totales: { canasta: canastaTotal, columpios: columpiosTotal }, porJugador };
 }
 
 function actualizarTitulo(gm, pendiente, esGM, ganador) {
@@ -783,7 +836,7 @@ function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, di
         <div className="text-[10px] line-through text-white/70 font-semibold -mb-0.5">{valorBase.toFixed(2)}</div>
       )}
       <div className="font-extrabold text-base mt-0.5" style={{ fontVariantNumeric: "tabular-nums", color: (boosteado && !locked) ? "#FFFFFF" : activo ? "#1A0D05" : "#C2410C" }}>
-        {valor.toFixed(2)}
+        {typeof valor === "number" ? valor.toFixed(2) : (locked ? "BLOQ" : "---")}
       </div>
     </button>
   );
@@ -1156,10 +1209,12 @@ export default function CasaApuestasPingpong() {
 
   const [resolviendoCustoms, setResolviendoCustoms] = useState(null);
 
-  // Estados para acciones protegidas por contraseña
+  // Estados para acciones protegidas por contraseña y regalos
   const [accionProtegida, setAccionProtegida] = useState(null);
   const [pwdProtegida, setPwdProtegida] = useState("");
   const [errProtegida, setErrProtegida] = useState("");
+  const [modalDonar, setModalDonar] = useState(null);
+  const [cantidadDonar, setCantidadDonar] = useState("");
 
   const prevSlipLen = useRef(0);
 
@@ -1206,7 +1261,7 @@ export default function CasaApuestasPingpong() {
       }
       return { ...s, cuota: Number(nuevaCuota.toFixed(2)) };
     }));
-  }, [estado?.partidoAbierto?.boosts, estado?.margen]);
+  }, [estado?.partidoAbierto?.boosts, estado?.margen, estado?.historial]); // Añadido historial como dep
 
   useEffect(() => {
     if (slip.length > prevSlipLen.current) {
@@ -1313,6 +1368,18 @@ export default function CasaApuestasPingpong() {
       bettors: nuevosBettors,
       vetados: nuevosVetados
     });
+  }
+
+  function procesarDonacion() {
+    const qty = Number(cantidadDonar.replace(',', '.'));
+    if (isNaN(qty)) return;
+    
+    const nuevosBettors = { ...estado.bettors };
+    nuevosBettors[modalDonar] = Number(((nuevosBettors[modalDonar] || 0) + qty).toFixed(2));
+    
+    persistir({ ...estado, bettors: nuevosBettors });
+    setModalDonar(null);
+    setCantidadDonar("");
   }
 
   function exportarHistorial() {
@@ -1738,6 +1805,7 @@ export default function CasaApuestasPingpong() {
   const resto = rankingBettors.slice(3);
   const estadisticasApostantes = calcularEstadisticasApostantes(estado.historial, estado.bettors);
   const rankingEstilo = calcularRankingEstilo(estado.historial);
+  const statsCampos = calcularEstadisticasGlobales(estado.historial);
 
   const TABS = [
     { id: "partido", label: "Apuestas", icon: Swords },
@@ -2240,7 +2308,7 @@ export default function CasaApuestasPingpong() {
               )}
             </Panel>
 
-            <Panel icon={Ticket} titulo="🎲 Mejor tahúr del verano">
+            <Panel icon={Ticket} titulo="🎲 Mejor ludao del verano">
               {rankingBettors.length === 0 ? (
                 <p className="text-sm c-text-2">Nadie ha apostado todavía. Cada apostante empieza con 500 fichas.</p>
               ) : (
@@ -2255,9 +2323,16 @@ export default function CasaApuestasPingpong() {
                         const medalla = idx === 1 ? "🥇" : idx === 0 ? "🥈" : "🥉";
                         const vetado = estado.vetados?.includes(n);
                         return (
-                          <div key={n} className="flex flex-col items-center gap-1 w-16 relative">
-                            {vetado && <div className="absolute top-0 right-0 c-text-red2"><Ban size={14} /></div>}
-                            <Avatar name={n} size={26} />
+                          <div key={n} className="flex flex-col items-center gap-1 w-16 relative group">
+                            {vetado && <div className="absolute top-0 right-0 c-text-red2 z-10"><Ban size={14} /></div>}
+                            <div className="relative">
+                              <Avatar name={n} size={26} />
+                              {!modoEspectador && (
+                                <button onClick={() => setModalDonar(n)} className="absolute -top-1 -right-2 bg-green-500 text-white rounded-full p-0.5 shadow-md active:scale-90 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <Gift size={12} />
+                                </button>
+                              )}
+                            </div>
                             <div className="text-[10px] c-text-1 font-semibold truncate w-full text-center">{n}</div>
                             <div className={`w-full ${alturaOrden} rounded-t-md c-grad-podio border c-bd-2b flex flex-col items-center justify-end pb-1`}>
                               <span className="text-lg">{medalla}</span>
@@ -2279,7 +2354,7 @@ export default function CasaApuestasPingpong() {
                     const est = estadisticasApostantes[n] || { total: 0, aciertos: 0 };
                     const vetado = estado.vetados?.includes(n);
                     return (
-                      <div key={n} className="flex justify-between items-center text-sm px-1 py-1">
+                      <div key={n} className="flex justify-between items-center text-sm px-1 py-1 group">
                         <span className="flex items-center gap-2 c-text-3">
                            <span className="text-xs c-text-2 w-4">{i + 4}</span>
                            <div className="relative">
@@ -2292,9 +2367,10 @@ export default function CasaApuestasPingpong() {
                           {est.total > 0 && <span className="text-[10px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</span>}
                           <span className="font-mono font-bold c-text-1">{saldo.toFixed(2)}</span>
                           {!modoEspectador && (
-                             <div className="flex items-center ml-1 border-l c-bd-2 pl-2 gap-2">
+                             <div className="flex items-center ml-1 border-l c-bd-2 pl-2 gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                               <button onClick={() => setModalDonar(n)} className="text-green-600 hover:text-green-800" title="Añadir fichas"><Gift size={14} /></button>
                                <button onClick={() => toggleVeto(n)} className="c-text-2 hover:c-text-red2" title="Vetar/Desvetar"><Ban size={14} /></button>
-                               <button onClick={() => solicitarAccionProtegida('eliminar_apostante', n)} className="c-text-red2 opacity-50 hover:opacity-100 transition-opacity" title="Eliminar Apostante"><Trash2 size={14} /></button>
+                               <button onClick={() => solicitarAccionProtegida('eliminar_apostante', n)} className="c-text-red2" title="Eliminar Apostante"><Trash2 size={14} /></button>
                              </div>
                           )}
                         </span>
@@ -2333,7 +2409,7 @@ export default function CasaApuestasPingpong() {
         {tab === "historial" && (
           <div className="space-y-3">
             <Panel icon={BarChart2} titulo="📊 Estadísticas de la Casa">
-              <div className="grid grid-cols-2 gap-3 mb-2 text-center">
+              <div className="grid grid-cols-2 gap-3 mb-3 text-center">
                  <div className="bg-white p-3 rounded-lg border c-bd-1 shadow-sm">
                     <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Partidos Jugados</div>
                     <div className="font-bold text-2xl c-text-1">{estado.historial.length}</div>
@@ -2345,6 +2421,36 @@ export default function CasaApuestasPingpong() {
                     </div>
                  </div>
               </div>
+
+              {estado.historial.length > 0 && (
+                <div className="bg-white border c-bd-1 rounded-lg overflow-hidden mt-4">
+                  <div className="bg-gray-50 border-b c-bd-1 px-3 py-2 text-xs font-bold uppercase c-text-2 flex justify-between">
+                    <span>Victorias por Campo</span>
+                    <span>Total: {statsCampos.totales.canasta + statsCampos.totales.columpios}</span>
+                  </div>
+                  <div className="p-3 text-sm space-y-2">
+                    <div className="flex justify-between items-center font-bold">
+                       <span className="c-text-1">🏆 GLOBAL</span>
+                       <div className="flex gap-4">
+                         <span className="c-text-orange">Can: {statsCampos.totales.canasta}</span>
+                         <span className="c-text-blue">Col: {statsCampos.totales.columpios}</span>
+                       </div>
+                    </div>
+                    <div className="h-px bg-gray-200 my-2" />
+                    {Object.entries(statsCampos.porJugador)
+                      .sort((a, b) => (b[1].c + b[1].k) - (a[1].c + a[1].k))
+                      .map(([jug, stats]) => (
+                        <div key={jug} className="flex justify-between items-center">
+                          <span className="c-text-2">{jug}</span>
+                          <div className="flex gap-4 text-xs font-mono">
+                            <span className="w-12 text-right">{stats.c} <span className="text-[10px] c-text-4">Can</span></span>
+                            <span className="w-12 text-right">{stats.k} <span className="text-[10px] c-text-4">Col</span></span>
+                          </div>
+                        </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </Panel>
 
             {estado.historial.length > 0 && (
@@ -2578,6 +2684,31 @@ export default function CasaApuestasPingpong() {
             <div className="flex gap-2 pt-1">
               <button onClick={() => setAccionProtegida(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Atrás</button>
               <button onClick={ejecutarAccionProtegida} className="flex-1 rounded-lg bg-red-600 text-white py-2 text-sm font-bold">Autorizar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DONAR FICHAS */}
+      {modalDonar && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalDonar(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 border-t-4 border-t-green-500">
+            <div className="font-bold c-text-1 text-lg flex items-center gap-2">
+              <Gift size={18} className="text-green-600" /> Banco Central
+            </div>
+            <div className="text-sm c-text-2">
+              Añade (o quita con el signo -) fichas manualmente a la cuenta de <b className="c-text-1">{modalDonar}</b>.
+            </div>
+            <input
+              type="text" inputMode="decimal" value={cantidadDonar}
+              onChange={(e) => setCantidadDonar(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") procesarDonacion(); }}
+              placeholder="Ej: 100 o -50" autoFocus
+              className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-lg text-center font-bold c-text-1"
+            />
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setModalDonar(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={procesarDonacion} className="flex-1 rounded-lg bg-green-500 text-white py-2 text-sm font-bold shadow-md">Confirmar</button>
             </div>
           </div>
         </div>
