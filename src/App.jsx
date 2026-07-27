@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2, Gift } from "lucide-react";
+import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2, Gift, Target } from "lucide-react";
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
@@ -37,6 +37,19 @@ function isValidScore(a, b) {
   return isParcial(a, b);
 }
 
+function probPuntosIndividual(terminales, pts, isA) {
+  let p = 0;
+  terminales.forEach(t => {
+    if ((isA && t.a === pts) || (!isA && t.b === pts)) p += t.p;
+  });
+  return p;
+}
+
+function probDesdeTerminales(terminales, pa, pb) {
+  const t = terminales.find(t => t.a === pa && t.b === pb);
+  return t ? t.p : 0;
+}
+
 function calcularTerminales(pA) {
   const dp = Array(35).fill(0).map(() => Array(35).fill(0));
   dp[0][0] = 1;
@@ -57,10 +70,9 @@ function calcularTerminales(pA) {
   return term;
 }
 
-// NUEVO: Obtener tasas empíricas de cómo terminan los partidos basándose en el historial
+// Historial reforzado con 25 partidos fantasma para asentar cuotas de novatos
 function getEmpiricalRates(historial, a, b) {
   let p = 0, n = 0, aj = 0, total = 0;
-  // Buscamos partidos donde haya participado alguno de los dos (para tener volumen de datos)
   const matches = historial.filter(m => (m.teamA?.includes(a) || m.teamB?.includes(a)) || (m.teamA?.includes(b) || m.teamB?.includes(b)));
   
   matches.forEach(m => {
@@ -70,13 +82,11 @@ function getEmpiricalRates(historial, a, b) {
       total++;
   });
   
-  // Añadimos "partidos fantasma" (Bayes prior) para que nunca sea 0% absoluto y el modelo sea robusto
-  // Asumimos un deporte donde normalmente el 83% es normal, 15% deuce, 2% parciales.
-  const priorP = 0.02 * 10;
-  const priorN = 0.83 * 10;
-  const priorAj = 0.15 * 10;
+  const priorP = 0.03 * 25;
+  const priorN = 0.82 * 25;
+  const priorAj = 0.15 * 25;
   
-  const smoothTotal = total + 10;
+  const smoothTotal = total + 25;
   return {
       p: (p + priorP) / smoothTotal,
       n: (n + priorN) / smoothTotal,
@@ -108,7 +118,6 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
   const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
 
-  // AJUSTE EMPÍRICO DE LOS ESCENARIOS TERMINALES (Para arreglar parciales vs normal)
   const empRates = getEmpiricalRates(historial, nombreA, nombreB);
   let dpP = 0, dpN = 0, dpAj = 0;
   terminales.forEach(t => {
@@ -117,7 +126,6 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
       else dpN += t.p;
   });
 
-  // Re-escalamos las probabilidades matemáticas para que cuadren con la realidad histórica de los jugadores
   let probSumaCheck = 0;
   terminales.forEach(t => {
       if (isParcial(t.a, t.b)) t.p = t.p * (empRates.p / (dpP || 1));
@@ -126,13 +134,9 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
       probSumaCheck += t.p;
   });
 
-  // Normalizamos de nuevo por si hubiera desajustes
   terminales.forEach(t => { t.p = t.p / probSumaCheck; });
 
-  let probParciales = 0;
-  let probAjustado = 0;
-  let probNormal = 0;
-  
+  let probParciales = 0, probAjustado = 0, probNormal = 0;
   terminales.forEach(t => {
       if (isParcial(t.a, t.b)) probParciales += t.p;
       else if (t.a >= 22 || t.b >= 22) probAjustado += t.p;
@@ -378,9 +382,9 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
           }
       });
       
-      if (probConjunta <= 0) probConjunta = 0.001;
-      
-      probConjunta = Math.max(0.005, probConjunta); 
+      // SOLUCIÓN BUG CUOTAS INFLADAS A LA BAJA EN SGP: 
+      // Reducido drásticamente el límite para permitir cuotas conjuntas lógicas mucho más altas si es casi imposible.
+      probConjunta = Math.max(0.000001, probConjunta); 
       probConjunta = Math.min(0.98, probConjunta);
       
       cuotaStd = cuota(probConjunta, margen);
@@ -390,34 +394,51 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
   return Math.max(1.01, cuotaStd * cuotaCust);
 }
 
+// ESTADÍSTICAS GLOBALES AVANZADAS
 function calcularEstadisticasGlobales(historial) {
-  let canastaTotal = 0, columpiosTotal = 0;
+  let canastaTot = 0, columpiosTot = 0, solV = 0, solTot = 0, vientoV = 0, vientoTot = 0;
   const porJugador = {};
 
   historial.forEach(m => {
-    if (!m.ladoA || !m.ladoB || !m.teamA || !m.teamB) return;
+    if (!m.teamA || !m.teamB || m.teamA.length !== 1 || m.teamB.length !== 1) return;
     const aLabel = m.teamA[0];
     const bLabel = m.teamB[0];
-    const ganador = m.ganador;
-    const ladoGanador = (aLabel === ganador) ? m.ladoA : m.ladoB;
     
-    if (ladoGanador === "Canasta") canastaTotal++;
-    if (ladoGanador === "Columpios") columpiosTotal++;
+    if (!porJugador[aLabel]) porJugador[aLabel] = { cV:0, cD:0, kV:0, kD:0, solV:0, solD:0, vientoV:0, vientoD:0, upsetV:0 };
+    if (!porJugador[bLabel]) porJugador[bLabel] = { cV:0, cD:0, kV:0, kD:0, solV:0, solD:0, vientoV:0, vientoD:0, upsetV:0 };
 
-    if (!porJugador[aLabel]) porJugador[aLabel] = { c: 0, k: 0 }; // c: canasta, k: columpios
-    if (!porJugador[bLabel]) porJugador[bLabel] = { c: 0, k: 0 };
+    const ganador = m.ganador;
+    const ganoA = ganador === aLabel;
     
-    if (aLabel === ganador) {
-      if (m.ladoA === "Canasta") porJugador[aLabel].c++;
-      else porJugador[aLabel].k++;
+    // Comparación ELO para ver si fue una "Victoria Épica"
+    const eloA = m.ratingsAntes?.[aLabel] || 1000;
+    const eloB = m.ratingsAntes?.[bLabel] || 1000;
+    if (ganoA && eloA < eloB) porJugador[aLabel].upsetV++;
+    if (!ganoA && eloB < eloA) porJugador[bLabel].upsetV++;
+
+    // Desglose Campos
+    if (m.ladoA === "Canasta") { ganoA ? porJugador[aLabel].cV++ : porJugador[aLabel].cD++; canastaTot += ganoA ? 1 : 0; }
+    else if (m.ladoA === "Columpios") { ganoA ? porJugador[aLabel].kV++ : porJugador[aLabel].kD++; columpiosTot += ganoA ? 1 : 0; }
+
+    if (m.ladoB === "Canasta") { !ganoA ? porJugador[bLabel].cV++ : porJugador[bLabel].cD++; canastaTot += !ganoA ? 1 : 0; }
+    else if (m.ladoB === "Columpios") { !ganoA ? porJugador[bLabel].kV++ : porJugador[bLabel].kD++; columpiosTot += !ganoA ? 1 : 0; }
+
+    // Desglose Sol
+    if (m.solLado) {
+      if (m.solLado === m.ladoA) { ganoA ? porJugador[aLabel].solV++ : porJugador[aLabel].solD++; solTot++; if(ganoA) solV++; }
+      if (m.solLado === m.ladoB) { !ganoA ? porJugador[bLabel].solV++ : porJugador[bLabel].solD++; solTot++; if(!ganoA) solV++; }
     }
-    if (bLabel === ganador) {
-      if (m.ladoB === "Canasta") porJugador[bLabel].c++;
-      else porJugador[bLabel].k++;
+
+    // Desglose Viento
+    if (m.viento) {
+        ganoA ? porJugador[aLabel].vientoV++ : porJugador[aLabel].vientoD++;
+        !ganoA ? porJugador[bLabel].vientoV++ : porJugador[bLabel].vientoD++;
+        vientoTot += 2;
+        vientoV++;
     }
   });
 
-  return { totales: { canasta: canastaTotal, columpios: columpiosTotal }, porJugador };
+  return { totales: { canasta: canastaTot, columpios: columpiosTot, solV, solTot, vientoV, vientoTot }, porJugador };
 }
 
 function actualizarTitulo(gm, pendiente, esGM, ganador) {
@@ -1209,7 +1230,6 @@ export default function CasaApuestasPingpong() {
 
   const [resolviendoCustoms, setResolviendoCustoms] = useState(null);
 
-  // Estados para acciones protegidas por contraseña y regalos
   const [accionProtegida, setAccionProtegida] = useState(null);
   const [pwdProtegida, setPwdProtegida] = useState("");
   const [errProtegida, setErrProtegida] = useState("");
@@ -1261,7 +1281,7 @@ export default function CasaApuestasPingpong() {
       }
       return { ...s, cuota: Number(nuevaCuota.toFixed(2)) };
     }));
-  }, [estado?.partidoAbierto?.boosts, estado?.margen, estado?.historial]); // Añadido historial como dep
+  }, [estado?.partidoAbierto?.boosts, estado?.margen, estado?.historial]);
 
   useEffect(() => {
     if (slip.length > prevSlipLen.current) {
@@ -2282,6 +2302,7 @@ export default function CasaApuestasPingpong() {
                 </div>
               </Panel>
             )}
+            
             <Panel icon={Users} titulo="Ranking actual">
               {nombresJugadores.length === 0 ? (
                 <p className="text-sm c-text-2">Todavía no hay jugadores.</p>
@@ -2381,6 +2402,57 @@ export default function CasaApuestasPingpong() {
               )}
             </Panel>
 
+            <Panel icon={Target} titulo="📊 Estadísticas Globales y Desglose">
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                 <div className="bg-white p-3 rounded-lg border c-bd-1 shadow-sm text-center">
+                    <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Partidos Jugados</div>
+                    <div className="font-bold text-2xl c-text-1">{estado.historial.length}</div>
+                 </div>
+                 <div className="bg-white p-3 rounded-lg border c-bd-1 shadow-sm text-center">
+                    <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Fichas en Circulación</div>
+                    <div className="font-bold text-2xl c-text-orange">
+                       {Object.values(estado.bettors).reduce((a,b) => a + b, 0).toFixed(0)}
+                    </div>
+                 </div>
+              </div>
+
+              {estado.historial.length > 0 && (
+                <div className="bg-white border c-bd-1 rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 border-b c-bd-1 px-3 py-2 text-[10px] font-bold uppercase c-text-2">Desglose por Jugador</div>
+                  <div className="divide-y c-bd-1-60">
+                    {Object.entries(statsCampos.porJugador).sort((a,b) => (b[1].cV + b[1].kV) - (a[1].cV + a[1].kV)).map(([jug, stats]) => {
+                       const winRateCanasta = stats.cV + stats.cD > 0 ? Math.round(100 * stats.cV / (stats.cV + stats.cD)) : 0;
+                       const winRateColumpios = stats.kV + stats.kD > 0 ? Math.round(100 * stats.kV / (stats.kV + stats.kD)) : 0;
+                       
+                       return (
+                         <div key={jug} className="p-3 text-sm">
+                            <div className="font-bold c-text-1 mb-1.5">{jug}</div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                               <div className="flex justify-between items-center"><span className="c-text-2">Canasta</span>
+                                  <span className="font-mono">{stats.cV}V - {stats.cD}D <span className="text-[10px] c-text-4">({winRateCanasta}%)</span></span>
+                               </div>
+                               <div className="flex justify-between items-center"><span className="c-text-2">Columpios</span>
+                                  <span className="font-mono">{stats.kV}V - {stats.kD}D <span className="text-[10px] c-text-4">({winRateColumpios}%)</span></span>
+                               </div>
+                               <div className="flex justify-between items-center"><span className="c-text-2">Con Sol</span>
+                                  <span className="font-mono">{stats.solV}V - {stats.solD}D</span>
+                               </div>
+                               <div className="flex justify-between items-center"><span className="c-text-2">Con Viento</span>
+                                  <span className="font-mono">{stats.vientoV}V - {stats.vientoD}D</span>
+                               </div>
+                               <div className="flex justify-between items-center col-span-2 mt-1.5 pt-1.5 border-t c-bd-1-60">
+                                  <span className="c-text-2 font-medium flex items-center gap-1"><Trophy size={12} className="c-text-orange" /> Victorias Épicas <span className="text-[10px]">(vs superior ELO)</span></span>
+                                  <span className="font-mono font-bold c-text-orange">{stats.upsetV}</span>
+                               </div>
+                            </div>
+                         </div>
+                       )
+                    })}
+                  </div>
+                </div>
+              )}
+            </Panel>
+
             {(rankingEstilo.reyParciales || rankingEstilo.reyDeuce) && (
               <Panel icon={Trophy} titulo="🏅 Estilos de la temporada">
                 <div className="space-y-1.5 text-sm">
@@ -2408,51 +2480,6 @@ export default function CasaApuestasPingpong() {
 
         {tab === "historial" && (
           <div className="space-y-3">
-            <Panel icon={BarChart2} titulo="📊 Estadísticas de la Casa">
-              <div className="grid grid-cols-2 gap-3 mb-3 text-center">
-                 <div className="bg-white p-3 rounded-lg border c-bd-1 shadow-sm">
-                    <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Partidos Jugados</div>
-                    <div className="font-bold text-2xl c-text-1">{estado.historial.length}</div>
-                 </div>
-                 <div className="bg-white p-3 rounded-lg border c-bd-1 shadow-sm">
-                    <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Fichas en Circulación</div>
-                    <div className="font-bold text-2xl c-text-orange">
-                       {Object.values(estado.bettors).reduce((a,b) => a + b, 0).toFixed(0)}
-                    </div>
-                 </div>
-              </div>
-
-              {estado.historial.length > 0 && (
-                <div className="bg-white border c-bd-1 rounded-lg overflow-hidden mt-4">
-                  <div className="bg-gray-50 border-b c-bd-1 px-3 py-2 text-xs font-bold uppercase c-text-2 flex justify-between">
-                    <span>Victorias por Campo</span>
-                    <span>Total: {statsCampos.totales.canasta + statsCampos.totales.columpios}</span>
-                  </div>
-                  <div className="p-3 text-sm space-y-2">
-                    <div className="flex justify-between items-center font-bold">
-                       <span className="c-text-1">🏆 GLOBAL</span>
-                       <div className="flex gap-4">
-                         <span className="c-text-orange">Can: {statsCampos.totales.canasta}</span>
-                         <span className="c-text-blue">Col: {statsCampos.totales.columpios}</span>
-                       </div>
-                    </div>
-                    <div className="h-px bg-gray-200 my-2" />
-                    {Object.entries(statsCampos.porJugador)
-                      .sort((a, b) => (b[1].c + b[1].k) - (a[1].c + a[1].k))
-                      .map(([jug, stats]) => (
-                        <div key={jug} className="flex justify-between items-center">
-                          <span className="c-text-2">{jug}</span>
-                          <div className="flex gap-4 text-xs font-mono">
-                            <span className="w-12 text-right">{stats.c} <span className="text-[10px] c-text-4">Can</span></span>
-                            <span className="w-12 text-right">{stats.k} <span className="text-[10px] c-text-4">Col</span></span>
-                          </div>
-                        </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Panel>
-
             {estado.historial.length > 0 && (
               <button onClick={exportarHistorial} className="w-full rounded-lg border border-dashed c-bd-orange c-text-orange text-sm font-semibold py-2.5">
                 ⬇️ Exportar historial a CSV
