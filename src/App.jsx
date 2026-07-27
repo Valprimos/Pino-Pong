@@ -730,7 +730,7 @@ function construirEstadoDesdeHistorialReal() {
     let deltaA, deltaB;
     if (equipoA.length === 1 && equipoB.length === 1) {
       const pEloBase = expectedScore(jugadores[equipoA[0]], jugadores[equipoB[0]]);
-      const pA = pEloBase; // Simplificado para la simulación inicial
+      const pA = pEloBase; 
       const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
       deltaA = K_FACTOR * (sA - pA);
       deltaB = K_FACTOR * (sB - (1 - pA));
@@ -805,6 +805,28 @@ function Chip({ children, tone = "gold" }) {
   );
 }
 
+// BARRAS ESTADÍSTICAS VISUALES (ARREGLADAS: Colores hardcodeados en style para Tailwind)
+function StatBar({ icon: Icon, title, w, l, colorStr = "#FF5A1F" }) {
+  const total = w + l;
+  const pct = total === 0 ? 0 : Math.round((w / total) * 100);
+  return (
+      <div className="mb-2.5 last:mb-0">
+          <div className="flex justify-between items-end mb-1">
+              <div className="flex items-center gap-1.5 text-xs font-semibold c-text-1">
+                  {Icon && <Icon size={14} style={{ color: colorStr }} />}
+                  {title}
+              </div>
+              <div className="text-[10px] font-bold c-text-2">
+                  {total > 0 ? `${pct}%` : "S/D"} <span className="font-mono font-normal ml-1">({w}V-{l}D)</span>
+              </div>
+          </div>
+          <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden shadow-inner">
+              <div style={{ width: `${pct}%`, backgroundColor: colorStr }} className="h-full transition-all duration-500"></div>
+          </div>
+      </div>
+  )
+}
+
 function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, disabled, sub, activo, isEditing }) {
   if (locked && !isEditing) {
     return (
@@ -871,28 +893,6 @@ function Panel({ icon: Icon, titulo, children, badge }) {
       {children}
     </div>
   );
-}
-
-// BARRAS ESTADÍSTICAS VISUALES
-function StatBar({ icon: Icon, title, w, l, color = "orange" }) {
-  const total = w + l;
-  const pct = total === 0 ? 0 : Math.round((w / total) * 100);
-  return (
-      <div className="mb-2.5 last:mb-0">
-          <div className="flex justify-between items-end mb-1">
-              <div className="flex items-center gap-1.5 text-xs font-semibold c-text-1">
-                  {Icon && <Icon size={14} className={`text-${color}-600`} />}
-                  {title}
-              </div>
-              <div className="text-[10px] font-bold c-text-2">
-                  {total > 0 ? `${pct}%` : "S/D"} <span className="font-mono font-normal ml-1">({w}V-{l}D)</span>
-              </div>
-          </div>
-          <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden shadow-inner">
-              <div style={{ width: `${pct}%` }} className={`h-full bg-${color}-500 transition-all duration-500`}></div>
-          </div>
-      </div>
-  )
 }
 
 function AnalisisColumna({ nombre, detalle }) {
@@ -1094,22 +1094,25 @@ function ModalConfirmar({ titulo, mensaje, onCancelar, onConfirmar, textoConfirm
   );
 }
 
-function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
+// FICHA DEL JUGADOR ACTUALIZADA (Todo despiece analítico está aquí)
+function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar }) {
   const rivales = Object.entries(perfil.h2h).sort((a, b) => b[1].n - a[1].n);
   const [h2hExpandido, setH2hExpandido] = useState(null);
 
+  const totalJugador = statsAvanzadas ? (statsAvanzadas.cV + statsAvanzadas.cD + statsAvanzadas.kV + statsAvanzadas.kD) : 0;
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50" onClick={onCerrar}>
-      <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-md space-y-3 border c-bd-1 c-maxh-80vh overflow-y-auto">
+      <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-md space-y-4 border c-bd-1 c-maxh-80vh overflow-y-auto">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Avatar name={nombre} size={32} />
+            <Avatar name={nombre} size={36} />
             <div>
-              <div className="font-bold c-text-1" style={{ fontFamily: "'Bebas Neue', sans-serif" }}>{nombre.toUpperCase()}</div>
-              <div className="text-xs c-text-2">Rating {rating.toFixed(2)}</div>
+              <div className="font-bold c-text-1 text-xl leading-none" style={{ fontFamily: "'Bebas Neue', sans-serif" }}>{nombre.toUpperCase()}</div>
+              <div className="text-xs c-text-2">Rating: {rating.toFixed(2)} · Partidos: {totalJugador}</div>
             </div>
           </div>
-          <button onClick={onCerrar} className="c-text-2"><X size={20} /></button>
+          <button onClick={onCerrar} className="c-text-2 bg-gray-100 p-1.5 rounded-full hover:bg-gray-200"><X size={20} /></button>
         </div>
 
         {Math.abs(perfil.racha) >= 2 && (
@@ -1118,8 +1121,45 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
           </Chip>
         )}
 
-        <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
-          <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Cara a cara</div>
+        {totalJugador > 0 ? (
+          <>
+            {/* BLOQUE TERRENO (AZUL) */}
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 shadow-sm">
+              <div className="text-[10px] font-bold text-blue-800 uppercase mb-2 flex items-center gap-1">
+                <MapPin size={12} /> Terreno y Campo
+              </div>
+              <StatBar title="En Canasta" w={statsAvanzadas.cV} l={statsAvanzadas.cD} colorStr="#3B82F6" />
+              <StatBar title="En Columpios" w={statsAvanzadas.kV} l={statsAvanzadas.kD} colorStr="#3B82F6" />
+            </div>
+
+            {/* BLOQUE CLIMA (NARANJA/AMARILLO) */}
+            <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 shadow-sm">
+              <div className="text-[10px] font-bold text-orange-800 uppercase mb-2 flex items-center gap-1">
+                <Sun size={12} /> Clima
+              </div>
+              <StatBar icon={Sun} title="Sobrevive con sol molestándole" w={statsAvanzadas.solV} l={statsAvanzadas.solD} colorStr="#F59E0B" />
+              <StatBar icon={Sun} title="Gana si el sol molesta al rival" w={statsAvanzadas.solRivalV} l={statsAvanzadas.solRivalD} colorStr="#D97706" />
+              <StatBar icon={Wind} title="Con viento en el ambiente" w={statsAvanzadas.vientoV} l={statsAvanzadas.vientoD} colorStr="#14B8A6" />
+            </div>
+
+            {/* BLOQUE NIVEL (VERDE) */}
+            <div className="bg-green-50 border border-green-100 rounded-xl p-3 shadow-sm">
+              <div className="text-[10px] font-bold text-green-800 uppercase mb-2 flex items-center gap-1">
+                <Trophy size={12} /> Rendimiento vs ELO
+              </div>
+              <StatBar icon={TrendingUp} title="Dando la sorpresa (vs ELO Superior)" w={statsAvanzadas.upsetV} l={statsAvanzadas.upsetD} colorStr="#10B981" />
+              <StatBar icon={TrendingDown} title="Cumpliendo como favorito" w={statsAvanzadas.favV} l={statsAvanzadas.favD} colorStr="#059669" />
+            </div>
+          </>
+        ) : (
+          <p className="text-sm c-text-3 italic bg-gray-50 p-3 rounded-lg border c-bd-2 text-center">Todavía no ha jugado suficientes partidos para tener estadísticas avanzadas.</p>
+        )}
+
+        {/* CARA A CARA */}
+        <div className="space-y-1.5 rounded-xl c-bg-app p-3 border c-bd-2">
+          <div className="text-[10px] font-bold uppercase tracking-wide c-text-2 flex items-center gap-1 mb-1">
+            <Swords size={12} /> Cara a cara (H2H)
+          </div>
           {rivales.length === 0 ? (
             <p className="text-sm c-text-2">Todavía no se ha cruzado con nadie.</p>
           ) : (
@@ -1130,7 +1170,7 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
                      className="flex justify-between text-sm p-2 cursor-pointer hover:bg-gray-50 active:scale-[0.99] transition-all"
                      onClick={() => setH2hExpandido(h2hExpandido === rival ? null : rival)}
                    >
-                     <span className="c-text-2 font-semibold">vs {rival}</span>
+                     <span className="c-text-2 font-semibold flex items-center gap-1">vs {rival} {h2hExpandido === rival ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}</span>
                      <span className="font-mono font-bold c-text-1">{d.victorias}V-{d.n - d.victorias}D <span className="font-normal text-xs c-text-2">({Math.round((100 * d.victorias) / d.n)}%)</span></span>
                    </div>
                    {h2hExpandido === rival && (
@@ -1149,28 +1189,10 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar }) {
             </div>
           )}
         </div>
-
-        {perfil.ultimos.length > 0 && (
-          <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
-            <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Últimos partidos</div>
-            {perfil.ultimos.map((p) => (
-              <div key={p.id} className="text-xs flex justify-between c-text-2 border-b c-bd-1-60 last:border-0 pb-1 last:pb-0">
-                <span>{p.aLabel} {p.pa} – {p.pb} {p.bLabel}</span>
-                <span className={p.ganador === nombre ? "c-text-green font-bold" : "c-text-red2 font-bold"}>{p.ganador === nombre ? "Ganó" : "Perdió"}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
 }
-
-const Lock = ({ size, className }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-  </svg>
-);
 
 export default function CasaApuestasPingpong() {
   const [estado, setEstado] = useState(null);
@@ -1226,8 +1248,6 @@ export default function CasaApuestasPingpong() {
   const [errProtegida, setErrProtegida] = useState("");
   const [modalDonar, setModalDonar] = useState(null);
   const [cantidadDonar, setCantidadDonar] = useState("");
-
-  const [expandedStatCard, setExpandedStatCard] = useState(null);
 
   const prevSlipLen = useRef(0);
 
@@ -2305,12 +2325,14 @@ export default function CasaApuestasPingpong() {
                 <div className="space-y-1">
                   {nombresJugadores.slice().sort((a, b) => estado.jugadores[b] - estado.jugadores[a]).map((n, i) => {
                     const racha = calcularRacha(estado.historial, n);
+                    const totalJugados = estado.historial.filter(m => m.teamA?.includes(n) || m.teamB?.includes(n)).length;
                     return (
                     <button key={n} onClick={() => setPerfilAbierto(n)} className="w-full flex items-center justify-between rounded-lg c-bg-app px-3 py-2 border c-bd-2 text-left active:scale-[0.98] transition-transform">
                       <div className="flex items-center gap-2 text-sm font-medium c-text-1 min-w-0">
                         <span className="c-text-2 text-xs w-4 shrink-0">{i + 1}</span>
                         <Avatar name={n} size={24} />
                         <span className="truncate">{n}</span>
+                        <span className="text-[10px] font-bold c-text-4 bg-white px-1.5 py-0.5 rounded-md border c-bd-2 shrink-0">{totalJugados} p.</span>
                         {estado.gm === n && <Crown size={14} className="c-text-gold shrink-0" />}
                         {estado.pendiente === n && <Chip tone="live">retador</Chip>}
                         {Math.abs(racha) >= 3 && <span className="shrink-0">{racha > 0 ? "🔥" : "❄️"}</span>}
@@ -2340,91 +2362,34 @@ export default function CasaApuestasPingpong() {
 
               {estado.historial.length > 0 && (
                 <div className="space-y-4">
-                  {/* RESUMEN GLOBAL CAMPOS Y CLIMA */}
+                  {/* RESUMEN GLOBAL CAMPOS Y CLIMA SÚPER LIMPIO */}
                   <div className="bg-white border c-bd-2 rounded-xl p-3 shadow-sm">
                      <h4 className="text-[10px] uppercase font-bold c-text-2 mb-2">Visión Global de Campos</h4>
                      <StatBar 
                         title="Victoria media por lado de mesa" 
                         w={statsCampos.totales.canasta} 
                         l={statsCampos.totales.columpios} 
-                        color="blue" 
+                        colorStr="#3B82F6" 
                      />
                      <div className="flex justify-between text-[10px] c-text-3 font-semibold mt-1">
                         <span>Lado Canasta ({statsCampos.totales.canasta}V)</span>
                         <span>Lado Columpios ({statsCampos.totales.columpios}V)</span>
                      </div>
 
-                     <h4 className="text-[10px] uppercase font-bold c-text-2 mb-2 mt-4">Impacto del Sol</h4>
+                     <h4 className="text-[10px] uppercase font-bold c-text-2 mb-2 mt-4">Impacto Global del Sol</h4>
                      <StatBar 
                         icon={Sun} 
                         title="Sobrevivir al Sol en contra" 
                         w={statsCampos.totales.solMataJugador} 
                         l={statsCampos.totales.solTot - statsCampos.totales.solMataJugador} 
-                        color="gold" 
+                        colorStr="#F59E0B" 
                      />
                      <p className="text-[9px] c-text-4 text-center mt-1">
-                        Porcentaje de partidos donde el jugador que tenía el sol molestándole de cara consiguió ganar.
+                        Porcentaje de partidos donde el jugador que tenía el sol molestándole de cara consiguió ganar a pesar de ello.
                      </p>
                   </div>
-
-                  {/* DESGLOSE POR JUGADOR (ACORDEÓN MÁS VISUAL) */}
-                  <div className="space-y-2">
-                    <h4 className="text-[10px] uppercase font-bold c-text-2 mb-1 ml-1">Radiografía por Jugador</h4>
-                    {Object.entries(statsCampos.porJugador)
-                       .sort((a,b) => (b[1].cV + b[1].kV) - (a[1].cV + a[1].kV))
-                       .map(([jug, stats]) => {
-                          const totalJugador = stats.cV + stats.cD + stats.kV + stats.kD;
-                          if (totalJugador === 0) return null;
-                          const isExpanded = expandedStatCard === jug;
-                          
-                          return (
-                            <div key={jug} className="bg-white border c-bd-2 rounded-xl overflow-hidden shadow-sm transition-all duration-300">
-                               <button 
-                                  onClick={() => setExpandedStatCard(isExpanded ? null : jug)}
-                                  className="w-full flex items-center justify-between p-3 active:bg-gray-50"
-                               >
-                                  <div className="flex items-center gap-2">
-                                     <Avatar name={jug} size={24} />
-                                     <span className="font-bold c-text-1 text-sm">{jug}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                     <span className="text-[10px] font-bold c-text-2 bg-gray-100 px-2 py-0.5 rounded-full">
-                                        {totalJugador} part.
-                                     </span>
-                                     {isExpanded ? <ChevronUp size={16} className="c-text-4" /> : <ChevronDown size={16} className="c-text-4" />}
-                                  </div>
-                               </button>
-                               
-                               {isExpanded && (
-                                  <div className="px-3 pb-3 pt-1 border-t c-bd-1-60 space-y-4">
-                                     
-                                     {/* CAMPOS */}
-                                     <div>
-                                        <div className="text-[9px] font-bold c-text-4 uppercase mb-1.5 flex items-center gap-1"><MapPin size={10} /> Rendimiento en Campo</div>
-                                        <StatBar title="Lado Canasta" w={stats.cV} l={stats.cD} color="blue" />
-                                        <StatBar title="Lado Columpios" w={stats.kV} l={stats.kD} color="indigo" />
-                                     </div>
-
-                                     {/* CLIMA */}
-                                     <div>
-                                        <div className="text-[9px] font-bold c-text-4 uppercase mb-1.5 flex items-center gap-1"><Sun size={10} /> Condiciones Climáticas</div>
-                                        <StatBar icon={Sun} title="Con sol molestándole" w={stats.solV} l={stats.solD} color="gold" />
-                                        <StatBar icon={Sun} title="Con sol molestando al rival" w={stats.solRivalV} l={stats.solRivalD} color="orange" />
-                                        <StatBar icon={Wind} title="Con viento en el ambiente" w={stats.vientoV} l={stats.vientoD} color="teal" />
-                                     </div>
-
-                                     {/* ELO */}
-                                     <div>
-                                        <div className="text-[9px] font-bold c-text-4 uppercase mb-1.5 flex items-center gap-1"><Trophy size={10} /> Rendimiento por Nivel (ELO)</div>
-                                        <StatBar icon={TrendingUp} title="Dando la sorpresa (vs ELO Superior)" w={stats.upsetV} l={stats.upsetD} color="green" />
-                                        <StatBar icon={TrendingDown} title="Como favorito (vs ELO Inferior)" w={stats.favV} l={stats.favD} color="red" />
-                                     </div>
-
-                                  </div>
-                               )}
-                            </div>
-                          )
-                    })}
+                  <div className="text-center text-[10px] c-text-3 font-medium bg-gray-50 border c-bd-2 rounded-lg p-2">
+                    Toca en cualquier jugador del ranking de arriba para ver su despiece estadístico detallado.
                   </div>
                 </div>
               )}
@@ -2714,6 +2679,7 @@ export default function CasaApuestasPingpong() {
           nombre={perfilAbierto}
           perfil={construirPerfilJugador(estado.historial, perfilAbierto)}
           rating={ratingDe(perfilAbierto)}
+          statsAvanzadas={statsCampos.porJugador[perfilAbierto]}
           onCerrar={() => setPerfilAbierto(null)}
         />
       )}
