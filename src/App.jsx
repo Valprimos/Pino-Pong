@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban } from "lucide-react";
+import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2, Gift, Target, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronUp } from "lucide-react";
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
@@ -37,6 +37,19 @@ function isValidScore(a, b) {
   return isParcial(a, b);
 }
 
+function probPuntosIndividual(terminales, pts, isA) {
+  let p = 0;
+  terminales.forEach(t => {
+    if ((isA && t.a === pts) || (!isA && t.b === pts)) p += t.p;
+  });
+  return p;
+}
+
+function probDesdeTerminales(terminales, pa, pb) {
+  const t = terminales.find(t => t.a === pa && t.b === pb);
+  return t ? t.p : 0;
+}
+
 function calcularTerminales(pA) {
   const dp = Array(35).fill(0).map(() => Array(35).fill(0));
   dp[0][0] = 1;
@@ -57,22 +70,27 @@ function calcularTerminales(pA) {
   return term;
 }
 
-function probDesdeTerminales(terminales, a, b) {
-  const match = terminales.find(t => t.a === a && t.b === b);
-  if (!match) return 0;
-  // Se sube artificialmente la base de probabilidad para que la cuota final baje y no sea tan exagerada
-  return Math.min(0.98, (match.p * 1.8) + 0.08); 
-}
-
-function probPuntosIndividual(terminales, pts, isA) {
-  let sum = 0;
-  terminales.forEach(t => {
-      if (isA && t.a === pts) sum += t.p;
-      if (!isA && t.b === pts) sum += t.p;
+function getEmpiricalRates(historial, a, b) {
+  let p = 0, n = 0, aj = 0, total = 0;
+  const matches = historial.filter(m => (m.teamA?.includes(a) || m.teamB?.includes(a)) || (m.teamA?.includes(b) || m.teamB?.includes(b)));
+  
+  matches.forEach(m => {
+      if (isParcial(m.pa, m.pb)) p++;
+      else if (m.pa >= 22 || m.pb >= 22) aj++;
+      else n++;
+      total++;
   });
-  if (sum === 0) return 0;
-  // Se sube artificialmente la base para que la cuota final sea más conservadora
-  return Math.min(0.98, (sum * 1.8) + 0.08); 
+  
+  const priorP = 0.03 * 25;
+  const priorN = 0.82 * 25;
+  const priorAj = 0.15 * 25;
+  
+  const smoothTotal = total + 25;
+  return {
+      p: (p + priorP) / smoothTotal,
+      n: (n + priorN) / smoothTotal,
+      aj: (aj + priorAj) / smoothTotal,
+  };
 }
 
 function cuota(p, margen) {
@@ -87,7 +105,7 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const perdedorEsperado = Math.round(19 * closeness);
 
   const ganador = { A: cuota(pA, margen), B: cuota(pB, margen), pA, pB };
-  const terminales = calcularTerminales(pA);
+  let terminales = calcularTerminales(pA);
 
   const perdedorEsperadoA = perdedorEsperadoJugador(historial, nombreA, perdedorEsperado);
   const perdedorEsperadoB = perdedorEsperadoJugador(historial, nombreB, perdedorEsperado);
@@ -99,33 +117,44 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
   const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
   const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
 
-  let probParciales = 0;
-  let probAjustado = 0;
-  let probNormal = 0;
-  
+  const empRates = getEmpiricalRates(historial, nombreA, nombreB);
+  let dpP = 0, dpN = 0, dpAj = 0;
   terminales.forEach(t => {
-      if (isParcial(t.a, t.b)) {
-          probParciales += t.p;
-      } else if (t.a >= 22 || t.b >= 22) {
-          probAjustado += t.p;
-      } else if ((t.a === 21 && t.b >= 3 && t.b <= 19) || (t.b === 21 && t.a >= 3 && t.a <= 19)) {
-          probNormal += t.p;
-      }
+      if (isParcial(t.a, t.b)) dpP += t.p;
+      else if (t.a >= 22 || t.b >= 22) dpAj += t.p;
+      else dpN += t.p;
+  });
+
+  let probSumaCheck = 0;
+  terminales.forEach(t => {
+      if (isParcial(t.a, t.b)) t.p = t.p * (empRates.p / (dpP || 1));
+      else if (t.a >= 22 || t.b >= 22) t.p = t.p * (empRates.aj / (dpAj || 1));
+      else t.p = t.p * (empRates.n / (dpN || 1));
+      probSumaCheck += t.p;
+  });
+
+  terminales.forEach(t => { t.p = t.p / probSumaCheck; });
+
+  let probParciales = 0, probAjustado = 0, probNormal = 0;
+  terminales.forEach(t => {
+      if (isParcial(t.a, t.b)) probParciales += t.p;
+      else if (t.a >= 22 || t.b >= 22) probAjustado += t.p;
+      else probNormal += t.p;
   });
 
   const comoTermina = {
-    parciales: cuota(probParciales * 1.1 + 0.02, margen),
+    parciales: cuota(probParciales, margen),
     normal: cuota(probNormal, margen),
-    ajustado: cuota(probAjustado * 1.1 + 0.02, margen),
+    ajustado: cuota(probAjustado, margen),
   };
 
   const resultadosExactos = [
-    { marcador: `21-12`, p: probDesdeTerminales(terminales, 21, 12) },
-    { marcador: `21-15`, p: probDesdeTerminales(terminales, 21, 15) },
-    { marcador: `21-19`, p: probDesdeTerminales(terminales, 21, 19) },
-    { marcador: `12-21`, p: probDesdeTerminales(terminales, 12, 21) },
-    { marcador: `15-21`, p: probDesdeTerminales(terminales, 15, 21) },
-    { marcador: `19-21`, p: probDesdeTerminales(terminales, 19, 21) },
+    { marcador: `21-12`, p: terminales.find(t => t.a === 21 && t.b === 12)?.p || 0 },
+    { marcador: `21-15`, p: terminales.find(t => t.a === 21 && t.b === 15)?.p || 0 },
+    { marcador: `21-19`, p: terminales.find(t => t.a === 21 && t.b === 19)?.p || 0 },
+    { marcador: `12-21`, p: terminales.find(t => t.a === 12 && t.b === 21)?.p || 0 },
+    { marcador: `15-21`, p: terminales.find(t => t.a === 15 && t.b === 21)?.p || 0 },
+    { marcador: `19-21`, p: terminales.find(t => t.a === 19 && t.b === 21)?.p || 0 },
   ].map(res => ({ marcador: res.marcador, cuota: cuota(res.p, margen) }));
 
   return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, resultadosExactos, terminales, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
@@ -260,8 +289,7 @@ function rangoHandicapSensato(pA, pB, perdedorEsperadoA, perdedorEsperadoB, marg
 function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, solLado, viento) {
   const avgA = ratingsA.reduce((s, r) => s + r, 0) / ratingsA.length;
   const avgB = ratingsB.reduce((s, r) => s + r, 0) / ratingsB.length;
-  const { a: efA, b: efB } = ratingsEfectivas(avgA, avgB, ladoA, ladoB, solLado, viento);
-  const pA = expectedScore(efA, efB);
+  const pA = expectedScore(avgA, avgB);
   const pB = 1 - pA;
   const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
   return { deltaA: K_FACTOR * (sA - pA), deltaB: K_FACTOR * (sB - pB) };
@@ -309,15 +337,14 @@ function evaluarPata(mercado, seleccion, ctx, customResults = {}) {
   return false;
 }
 
+const isCustom = (m) => !["Ganador", "Resultado Exacto Partido", "Cómo termina"].includes(m) && !m.startsWith("Puntos Exactos") && !m.startsWith("Hándicap") && !m.startsWith("Puntos ");
+
 function sonContradictorias(a, b, partido) {
   if (!partido) return false;
-
-  const isCustom = (m) => !["Ganador", "Resultado Exacto Partido", "Cómo termina"].includes(m) && !m.startsWith("Puntos Exactos") && !m.startsWith("Hándicap") && !m.startsWith("Puntos ");
   if (isCustom(a.mercado) || isCustom(b.mercado)) {
-      if (a.mercado === b.mercado && a.seleccion !== b.seleccion) return true;
-      return false;
+      return (a.mercado === b.mercado && a.seleccion !== b.seleccion);
   }
-
+  
   const allResultados = [];
   for(let pa=0; pa<=35; pa++){
     for(let pb=0; pb<=35; pb++){
@@ -325,21 +352,95 @@ function sonContradictorias(a, b, partido) {
     }
   }
 
-  let vecesGanaA = 0, vecesGanaB = 0, vecesGananAmbas = 0;
-  
+  let vecesGananAmbas = 0;
   for (const r of allResultados) {
     const ctx = { ganador: r.pa > r.pb ? partido.a : partido.b, pa: r.pa, pb: r.pb, nombreA: partido.a, nombreB: partido.b };
-    const w1 = evaluarPata(a.mercado, a.seleccion, ctx, {});
-    const w2 = evaluarPata(b.mercado, b.seleccion, ctx, {});
-    
-    if (w1) vecesGanaA++;
-    if (w2) vecesGanaB++;
-    if (w1 && w2) vecesGananAmbas++;
+    if (evaluarPata(a.mercado, a.seleccion, ctx, {}) && evaluarPata(b.mercado, b.seleccion, ctx, {})) {
+        vecesGananAmbas++;
+    }
   }
+  
+  return vecesGananAmbas === 0;
+}
 
-  if (vecesGananAmbas === 0) return true; 
-  if (vecesGananAmbas === vecesGanaA || vecesGananAmbas === vecesGanaB) return true;
-  return false;
+function calcularCuotaSGP(slip, mercados, partido, margen) {
+  if (slip.length === 0) return 1;
+  if (!mercados || !partido) return slip.reduce((a, b) => a * (b.cuota || 1), 1);
+  
+  const customLegs = slip.filter(s => isCustom(s.mercado));
+  const stdLegs = slip.filter(s => !isCustom(s.mercado));
+  
+  let cuotaStd = 1;
+  if (stdLegs.length > 0) {
+      let probConjunta = 0;
+      mercados.terminales.forEach(t => {
+          const ctx = { ganador: t.a > t.b ? partido.a : partido.b, pa: t.a, pb: t.b, nombreA: partido.a, nombreB: partido.b };
+          if (stdLegs.every(leg => evaluarPata(leg.mercado, leg.seleccion, ctx, {}))) {
+              probConjunta += t.p;
+          }
+      });
+      probConjunta = Math.max(0.000001, probConjunta); 
+      probConjunta = Math.min(0.98, probConjunta);
+      cuotaStd = cuota(probConjunta, margen);
+  }
+  
+  const cuotaCust = customLegs.reduce((a, b) => a * b.cuota, 1);
+  return Math.max(1.01, cuotaStd * cuotaCust);
+}
+
+function calcularEstadisticasGlobales(historial) {
+  let canastaTot = 0, columpiosTot = 0, solMataJugador = 0, solTot = 0, vientoV = 0, vientoTot = 0;
+  const porJugador = {};
+
+  historial.forEach(m => {
+    if (!m.teamA || !m.teamB || m.teamA.length !== 1 || m.teamB.length !== 1) return;
+    const aLabel = m.teamA[0];
+    const bLabel = m.teamB[0];
+    
+    if (!porJugador[aLabel]) porJugador[aLabel] = { cV:0, cD:0, kV:0, kD:0, solV:0, solD:0, solRivalV:0, solRivalD:0, vientoV:0, vientoD:0, upsetV:0, upsetD:0, favV:0, favD:0 };
+    if (!porJugador[bLabel]) porJugador[bLabel] = { cV:0, cD:0, kV:0, kD:0, solV:0, solD:0, solRivalV:0, solRivalD:0, vientoV:0, vientoD:0, upsetV:0, upsetD:0, favV:0, favD:0 };
+
+    const ganador = m.ganador;
+    const ganoA = ganador === aLabel;
+    
+    const eloA = m.ratingsAntes?.[aLabel] || 1000;
+    const eloB = m.ratingsAntes?.[bLabel] || 1000;
+    if (ganoA) {
+       if (eloA < eloB) { porJugador[aLabel].upsetV++; porJugador[bLabel].favD++; }
+       else { porJugador[aLabel].favV++; porJugador[bLabel].upsetD++; }
+    } else {
+       if (eloB < eloA) { porJugador[bLabel].upsetV++; porJugador[aLabel].favD++; }
+       else { porJugador[bLabel].favV++; porJugador[aLabel].upsetD++; }
+    }
+
+    if (m.ladoA === "Canasta") { ganoA ? porJugador[aLabel].cV++ : porJugador[aLabel].cD++; canastaTot += ganoA ? 1 : 0; }
+    else if (m.ladoA === "Columpios") { ganoA ? porJugador[aLabel].kV++ : porJugador[aLabel].kD++; columpiosTot += ganoA ? 1 : 0; }
+
+    if (m.ladoB === "Canasta") { !ganoA ? porJugador[bLabel].cV++ : porJugador[bLabel].cD++; canastaTot += !ganoA ? 1 : 0; }
+    else if (m.ladoB === "Columpios") { !ganoA ? porJugador[bLabel].kV++ : porJugador[bLabel].kD++; columpiosTot += !ganoA ? 1 : 0; }
+
+    if (m.solLado) {
+      if (m.solLado === m.ladoA) { 
+         ganoA ? porJugador[aLabel].solV++ : porJugador[aLabel].solD++; 
+         ganoA ? porJugador[bLabel].solRivalD++ : porJugador[bLabel].solRivalV++;
+         solTot++; if(!ganoA) solMataJugador++;
+      }
+      if (m.solLado === m.ladoB) { 
+         !ganoA ? porJugador[bLabel].solV++ : porJugador[bLabel].solD++; 
+         !ganoA ? porJugador[aLabel].solRivalD++ : porJugador[aLabel].solRivalV++;
+         solTot++; if(ganoA) solMataJugador++;
+      }
+    }
+
+    if (m.viento) {
+        ganoA ? porJugador[aLabel].vientoV++ : porJugador[aLabel].vientoD++;
+        !ganoA ? porJugador[bLabel].vientoV++ : porJugador[bLabel].vientoD++;
+        vientoTot += 2;
+        vientoV++;
+    }
+  });
+
+  return { totales: { canasta: canastaTot, columpios: columpiosTot, solMataJugador, solTot, vientoV, vientoTot }, porJugador };
 }
 
 function actualizarTitulo(gm, pendiente, esGM, ganador) {
@@ -458,10 +559,6 @@ function calcularRacha(historial, nombre) {
 }
 
 function construirPerfilJugador(historial, nombre) {
-  const registros = construirRegistrosPorJugador(historial);
-  const regs = registros[nombre] || [];
-  const contarVD = (arr) => ({ n: arr.length, victorias: arr.filter((r) => r.gano).length });
-
   const registrosH2H = construirRegistrosH2H(historial);
   const h2h = {};
   Object.entries(registrosH2H[nombre] || {}).forEach(([rival, list]) => {
@@ -476,12 +573,6 @@ function construirPerfilJugador(historial, nombre) {
 
   return {
     racha: calcularRacha(historial, nombre),
-    lado: {
-      Canasta: contarVD(regs.filter((r) => r.lado === "Canasta")),
-      Columpios: contarVD(regs.filter((r) => r.lado === "Columpios")),
-    },
-    sol: contarVD(regs.filter((r) => r.solLeMolesta)),
-    viento: contarVD(regs.filter((r) => r.viento)),
     h2h,
     ultimos: partidos.slice(0, 5),
   };
@@ -633,11 +724,8 @@ function construirEstadoDesdeHistorialReal() {
     const ganoA = m.pa > m.pb;
     let deltaA, deltaB;
     if (equipoA.length === 1 && equipoB.length === 1) {
-      const { pA } = probabilidadYDetalle(
-        historial, equipoA[0], equipoB[0],
-        jugadores[equipoA[0]], jugadores[equipoB[0]],
-        m.ladoA ?? null, m.ladoB ?? null, m.solLado ?? null, !!m.viento
-      );
+      const pEloBase = expectedScore(jugadores[equipoA[0]], jugadores[equipoB[0]]);
+      const pA = pEloBase; 
       const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
       deltaA = K_FACTOR * (sA - pA);
       deltaB = K_FACTOR * (sB - (1 - pA));
@@ -690,7 +778,7 @@ function Avatar({ name, size = 28 }) {
   const iniciales = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
   return (
     <span
-      className="inline-flex items-center justify-center rounded-full font-bold c-text-1 shrink-0 ring-2 ring-black/20"
+      className="inline-flex items-center justify-center rounded-full font-bold c-text-1 shrink-0 ring-2 ring-black/20 shadow-sm"
       style={{ background: colorFromName(name), width: size, height: size, fontSize: size * 0.4 }}
     >
       {iniciales}
@@ -706,14 +794,35 @@ function Chip({ children, tone = "gold" }) {
     info: "c-bg-blue-soft c-bd-blue-50 c-text-blue",
   };
   return (
-    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide whitespace-nowrap ${tones[tone]}`}>
+    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide whitespace-nowrap shadow-sm ${tones[tone]}`}>
       {children}
     </span>
   );
 }
 
-function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, disabled, sub, activo }) {
-  if (locked) {
+function StatBar({ icon: Icon, title, w, l, barClass, textClass }) {
+  const total = w + l;
+  const pct = total === 0 ? 0 : Math.round((w / total) * 100);
+  return (
+      <div className="mb-2.5 last:mb-0">
+          <div className="flex justify-between items-end mb-1">
+              <div className={`flex items-center gap-1.5 text-xs font-semibold c-text-1`}>
+                  {Icon && <Icon size={14} className={textClass} />}
+                  {title}
+              </div>
+              <div className="text-[10px] font-bold c-text-2">
+                  {total > 0 ? `${pct}%` : "S/D"} <span className="font-mono font-normal ml-1">({w}V-{l}D)</span>
+              </div>
+          </div>
+          <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden shadow-inner flex">
+              <div style={{ width: `${pct}%` }} className={`h-full ${barClass} transition-all duration-500`}></div>
+          </div>
+      </div>
+  )
+}
+
+function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, disabled, sub, activo, isEditing }) {
+  if (locked && !isEditing) {
     return (
       <button disabled className="relative flex-1 c-minw-84 rounded-lg px-2 py-2.5 text-center border-2 c-bg-app c-bd-1 opacity-50 cursor-not-allowed">
         <div className="absolute top-1 right-1"><Lock size={12} className="c-text-2" /></div>
@@ -726,16 +835,23 @@ function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, di
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled && !isEditing}
       className={`relative flex-1 c-minw-84 rounded-lg px-2 py-2.5 text-center transition-all duration-150 active:scale-90 disabled:opacity-40 disabled:active:scale-100 border-2 ${
-        boosteado
+        locked && isEditing 
+          ? "c-bg-red-soft c-bd-red-50"
+          : boosteado
           ? `boost-cuota border-transparent ${activo ? "ring-4 ring-white scale-110" : ""}`
           : activo
           ? "c-bg-orange c-bd-orange c-shadow-glow-orange scale-105"
           : "c-bg-app c-bd-1 hover:c-bd-orange-60"
       }`}
     >
-      {boosteado && (
+      {locked && isEditing && (
+        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 c-bg-red text-white text-[8px] font-extrabold px-2 py-0.5 rounded-full shadow whitespace-nowrap">
+          BLOQUEADA
+        </span>
+      )}
+      {boosteado && !locked && (
         <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 c-bg-mesa text-white text-[8px] font-extrabold px-2 py-0.5 rounded-full shadow whitespace-nowrap">
           🔥 SUPERCUOTA
         </span>
@@ -745,13 +861,13 @@ function BotonCuota({ etiqueta, valor, valorBase, boosteado, locked, onClick, di
           <Check size={12} strokeWidth={4} className={boosteado ? "c-text-mesa" : "c-text-orange-lg"} />
         </span>
       )}
-      <div className={`text-[10.5px] leading-tight font-semibold truncate ${boosteado ? "text-white" : activo ? "c-text-dark-on-accent" : "c-text-2"}`}>{etiqueta}</div>
-      {sub && <div className={`text-[9px] ${boosteado ? "text-white/80" : activo ? "c-text-dark-on-accent-70" : "c-text-2"}`}>{sub}</div>}
-      {boosteado && typeof valorBase === "number" && (
+      <div className={`text-[10.5px] leading-tight font-semibold truncate ${boosteado && !locked ? "text-white" : activo ? "c-text-dark-on-accent" : "c-text-2"}`}>{etiqueta}</div>
+      {sub && <div className={`text-[9px] ${boosteado && !locked ? "text-white/80" : activo ? "c-text-dark-on-accent-70" : "c-text-2"}`}>{sub}</div>}
+      {boosteado && !locked && typeof valorBase === "number" && (
         <div className="text-[10px] line-through text-white/70 font-semibold -mb-0.5">{valorBase.toFixed(2)}</div>
       )}
-      <div className="font-extrabold text-base mt-0.5" style={{ fontVariantNumeric: "tabular-nums", color: boosteado ? "#FFFFFF" : activo ? "#1A0D05" : "#C2410C" }}>
-        {valor.toFixed(2)}
+      <div className="font-extrabold text-base mt-0.5" style={{ fontVariantNumeric: "tabular-nums", color: (boosteado && !locked) ? "#FFFFFF" : activo ? "#1A0D05" : "#C2410C" }}>
+        {typeof valor === "number" ? valor.toFixed(2) : (locked ? "BLOQ" : "---")}
       </div>
     </button>
   );
@@ -855,32 +971,6 @@ function TicketApuesta({ bettor, apuestas, onCerrar }) {
   );
 }
 
-function traducirPata(mercado, seleccion) {
-  if (mercado === "Ganador") return `${seleccion} gana el partido.`;
-  if (mercado === "Resultado Exacto Partido") return `El partido termina exactamente ${seleccion}.`;
-  if (mercado.startsWith("Hándicap")) {
-      const k = mercado.match(/(\d+)/)[1];
-      return `${seleccion} gana con una ventaja de ${k} o más puntos.`;
-  }
-  if (mercado.startsWith("Puntos Exactos")) {
-      const j = mercado.replace("Puntos Exactos ", "");
-      return `${j} anota exactamente ${seleccion} puntos en todo el partido.`;
-  }
-  if (mercado.startsWith("Puntos")) {
-      const m = mercado.match(/^Puntos (.+) ([\d.]+)$/);
-      if(!m) return `${mercado}: ${seleccion}`;
-      const j = m[1], linea = Number(m[2]);
-      if (seleccion === "Más") return `${j} anota ${Math.ceil(linea)} puntos o más.`;
-      return `${j} se queda en ${Math.floor(linea)} puntos o menos.`;
-  }
-  if (mercado === "Cómo termina") {
-      if (seleccion === "parciales") return `El perdedor se queda en 2, 1 o 0 puntos (7-0, 9-1, 11-2...).`;
-      if (seleccion === "ajustado") return `El partido se va al deuce (22-20, 23-21, etc.).`;
-      if (seleccion === "normal") return `Termina a 21 normal, el perdedor hace entre 3 y 19 puntos.`;
-  }
-  return `${mercado}: ${seleccion}`;
-}
-
 function ModalDetalleApuesta({ apuesta, onCerrar }) {
   if (!apuesta) return null;
   const esComb = apuesta.tipo === "combinada";
@@ -903,10 +993,6 @@ function ModalDetalleApuesta({ apuesta, onCerrar }) {
             {patas.map((p, i) => (
                 <div key={i} className={`p-2.5 rounded-lg border ${p.acertada === true ? 'c-bg-green-soft c-bd-green-50' : p.acertada === false ? 'c-bg-red-soft c-bd-red-50' : 'c-bg-app c-bd-1'}`}>
                    <div className="font-bold text-sm c-text-1 mb-1">{p.mercado} · {p.seleccion}</div>
-                   <div className="text-xs c-text-2 italic flex items-start gap-1">
-                     <Info size={14} className="shrink-0 mt-0.5" />
-                     <span>"{traducirPata(p.mercado, p.seleccion)}"</span>
-                   </div>
                    {p.acertada !== undefined && (
                        <div className={`text-xs font-bold mt-2 pt-2 border-t border-dashed ${p.acertada ? 'c-text-green c-bd-green-50' : 'c-text-red2 c-bd-red-50'}`}>
                           {p.acertada ? "✅ ACERTADA" : "❌ FALLADA"}
@@ -972,77 +1058,88 @@ function ModalConfirmar({ titulo, mensaje, onCancelar, onConfirmar, textoConfirm
   );
 }
 
-function FilaRecord({ etiqueta, d }) {
-  return (
-    <div className="flex justify-between text-sm">
-      <span className="c-text-2">{etiqueta}</span>
-      {d.n > 0 ? (
-        <span className="font-mono font-bold c-text-1">{d.victorias}V-{d.n - d.victorias}D <span className="c-text-2 font-normal">({Math.round((100 * d.victorias) / d.n)}%)</span></span>
-      ) : (
-        <span className="c-text-4">sin datos</span>
-      )}
-    </div>
-  );
-}
-
-function ModalPerfil({ nombre, perfil, rating, onCerrar, modoEspectador, onEliminar }) {
+function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar }) {
   const rivales = Object.entries(perfil.h2h).sort((a, b) => b[1].n - a[1].n);
   const [h2hExpandido, setH2hExpandido] = useState(null);
 
+  const st = statsAvanzadas || { cV:0, cD:0, kV:0, kD:0, solV:0, solD:0, solRivalV:0, solRivalD:0, vientoV:0, vientoD:0, upsetV:0, upsetD:0, favV:0, favD:0 };
+  const partidosJugados = st.cV + st.cD + st.kV + st.kD;
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50" onClick={onCerrar}>
-      <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-md space-y-3 border c-bd-1 c-maxh-80vh overflow-y-auto">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Avatar name={nombre} size={32} />
+      <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-md border c-bd-1 c-maxh-80vh overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Avatar name={nombre} size={40} />
             <div>
-              <div className="font-bold c-text-1" style={{ fontFamily: "'Bebas Neue', sans-serif" }}>{nombre.toUpperCase()}</div>
-              <div className="text-xs c-text-2">Rating {rating.toFixed(2)}</div>
+              <div className="font-bold c-text-1 text-2xl" style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.02em" }}>{nombre.toUpperCase()}</div>
+              <div className="flex gap-2 text-xs">
+                <span className="font-bold c-text-orange bg-orange-100 px-1.5 rounded">ELO {rating.toFixed(0)}</span>
+                <span className="c-text-2 font-medium bg-gray-100 px-1.5 rounded">{partidosJugados} jugados</span>
+              </div>
             </div>
           </div>
-          <button onClick={onCerrar} className="c-text-2"><X size={20} /></button>
+          <button onClick={onCerrar} className="c-text-2 bg-gray-100 p-1.5 rounded-full hover:bg-gray-200"><X size={20} /></button>
         </div>
 
         {Math.abs(perfil.racha) >= 2 && (
-          <Chip tone={perfil.racha > 0 ? "gold" : "info"}>
-            {perfil.racha > 0 ? "🔥" : "❄️"} {Math.abs(perfil.racha)} {perfil.racha > 0 ? "victorias" : "derrotas"} seguidas
-          </Chip>
+          <div className="mb-4">
+             <Chip tone={perfil.racha > 0 ? "gold" : "info"}>
+               {perfil.racha > 0 ? "🔥" : "❄️"} {Math.abs(perfil.racha)} {perfil.racha > 0 ? "victorias" : "derrotas"} seguidas
+             </Chip>
+          </div>
         )}
 
-        <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
-          <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Por campo</div>
-          <FilaRecord etiqueta="En Canasta" d={perfil.lado.Canasta} />
-          <FilaRecord etiqueta="En Columpios" d={perfil.lado.Columpios} />
-        </div>
+        {partidosJugados > 0 && (
+           <div className="space-y-4 p-3.5 c-bg-app rounded-xl border c-bd-2 shadow-inner mb-4">
+              <h4 className="text-xs uppercase font-bold c-text-2 mb-1">📊 Situación y Condiciones</h4>
+              
+              <div className="space-y-2.5 bg-white p-3 rounded-lg shadow-sm border c-bd-1" style={{borderLeftWidth: '4px', borderLeftColor: '#3B82F6'}}>
+                 <div className="text-[10px] font-bold c-text-4 uppercase mb-1 flex items-center gap-1"><MapPin size={12} /> Terreno de juego</div>
+                 <StatBar title="Lado Canasta" w={st.cV} l={st.cD} barClass="c-bg-blue" textClass="c-text-blue" icon={MapPin} />
+                 <StatBar title="Lado Columpios" w={st.kV} l={st.kD} barClass="c-bg-orange" textClass="c-text-orange" icon={MapPin} />
+              </div>
 
-        <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
-          <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Con condiciones en contra</div>
-          <FilaRecord etiqueta="Con sol molestando" d={perfil.sol} />
-          <FilaRecord etiqueta="Con viento" d={perfil.viento} />
-        </div>
+              <div className="space-y-2.5 bg-white p-3 rounded-lg shadow-sm border c-bd-1" style={{borderLeftWidth: '4px', borderLeftColor: '#EAB308'}}>
+                 <div className="text-[10px] font-bold c-text-4 uppercase mb-1 flex items-center gap-1"><Sun size={12} /> Resistencia al Clima</div>
+                 <StatBar icon={Sun} title="Con sol molestándole" w={st.solV} l={st.solD} barClass="c-bg-gold" textClass="c-text-gold" />
+                 <StatBar icon={Sun} title="Con sol molestando al rival" w={st.solRivalV} l={st.solRivalD} barClass="c-bg-orange" textClass="c-text-orange" />
+                 <StatBar icon={Wind} title="En partidos con viento" w={st.vientoV} l={st.vientoD} barClass="c-bg-teal" textClass="c-text-teal" />
+              </div>
 
-        <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
-          <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Cara a cara</div>
+              <div className="space-y-2.5 bg-white p-3 rounded-lg shadow-sm border c-bd-1" style={{borderLeftWidth: '4px', borderLeftColor: '#22C55E'}}>
+                 <div className="text-[10px] font-bold c-text-4 uppercase mb-1 flex items-center gap-1"><Trophy size={12} /> Nivel ELO de partida</div>
+                 <StatBar icon={TrendingUp} title="Dando la sorpresa (vs ELO Superior)" w={st.upsetV} l={st.upsetD} barClass="c-bg-green" textClass="c-text-green" />
+                 <StatBar icon={TrendingDown} title="Como favorito (vs ELO Inferior)" w={st.favV} l={st.favD} barClass="c-bg-red" textClass="c-text-red" />
+              </div>
+           </div>
+        )}
+
+        <div className="bg-white p-3.5 rounded-xl border c-bd-2 shadow-sm mb-4">
+          <h4 className="text-xs uppercase font-bold c-text-2 mb-3">⚔️ Cara a Cara (H2H)</h4>
           {rivales.length === 0 ? (
-            <p className="text-sm c-text-2">Todavía no se ha cruzado con nadie.</p>
+            <p className="text-sm c-text-2 text-center py-2 bg-gray-50 rounded-lg">No hay registros contra otros jugadores aún.</p>
           ) : (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {rivales.map(([rival, d]) => (
-                <div key={rival} className="border c-bd-2 rounded-lg bg-white overflow-hidden">
+                <div key={rival} className="border c-bd-2 rounded-lg bg-gray-50 overflow-hidden shadow-sm">
                    <div
-                     className="flex justify-between text-sm p-2 cursor-pointer hover:bg-gray-50 active:scale-[0.99] transition-all"
+                     className="flex justify-between items-center text-sm px-3 py-2.5 cursor-pointer hover:bg-gray-100 transition-colors"
                      onClick={() => setH2hExpandido(h2hExpandido === rival ? null : rival)}
                    >
-                     <span className="c-text-2 font-semibold">vs {rival}</span>
-                     <span className="font-mono font-bold c-text-1">{d.victorias}V-{d.n - d.victorias}D <span className="font-normal text-xs c-text-2">({Math.round((100 * d.victorias) / d.n)}%)</span></span>
+                     <span className="c-text-1 font-bold flex items-center gap-2">vs {rival}</span>
+                     <div className="flex items-center gap-3">
+                         <span className="font-mono font-extrabold text-base c-text-mesa">{d.victorias} <span className="c-text-3 font-medium text-xs">V</span> - {d.n - d.victorias} <span className="c-text-3 font-medium text-xs">D</span></span>
+                         {h2hExpandido === rival ? <ChevronUp size={16} className="c-text-4" /> : <ChevronDown size={16} className="c-text-4" />}
+                     </div>
                    </div>
                    {h2hExpandido === rival && (
-                      <div className="px-2 pb-2 space-y-1 bg-gray-50 border-t c-bd-2 pt-2">
+                      <div className="px-3 pb-3 space-y-1 bg-white border-t c-bd-2 pt-2">
                          {d.partidos.length === 0 ? <span className="text-xs c-text-3">Sin registro detallado</span> : null}
                          {d.partidos.map(p => (
-                            <div key={p.id} className="text-[11px] flex justify-between c-text-3 border-b c-bd-1-60 last:border-0 pb-1 mb-1 last:pb-0 last:mb-0">
-                               <span>{new Date(p.fecha).toLocaleDateString("es-ES", { day: "2-digit", month: "short" })} · {p.aLabel} <span className={p.pa > p.pb ? "font-bold" : ""}>{p.pa}</span>-<span className={p.pb > p.pa ? "font-bold" : ""}>{p.pb}</span> {p.bLabel}</span>
-                               <span className={p.ganador === nombre ? "c-text-green font-bold" : "c-text-red2 font-bold"}>{p.ganador === nombre ? "W" : "L"}</span>
+                            <div key={p.id} className="text-[11px] flex justify-between c-text-3 border-b c-bd-1-60 last:border-0 py-1.5">
+                               <span>{new Date(p.fecha).toLocaleDateString("es-ES", { day: "2-digit", month: "short" })} · {p.aLabel} <span className={p.pa > p.pb ? "font-bold text-black" : ""}>{p.pa}</span>-<span className={p.pb > p.pa ? "font-bold text-black" : ""}>{p.pb}</span> {p.bLabel}</span>
+                               <span className={`px-1.5 rounded font-bold ${p.ganador === nombre ? "bg-green-100 c-text-green" : "bg-red-100 c-text-red2"}`}>{p.ganador === nombre ? "W" : "L"}</span>
                             </div>
                          ))}
                       </div>
@@ -1054,21 +1151,15 @@ function ModalPerfil({ nombre, perfil, rating, onCerrar, modoEspectador, onElimi
         </div>
 
         {perfil.ultimos.length > 0 && (
-          <div className="space-y-1.5 rounded-lg c-bg-app p-3 border c-bd-2">
-            <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Últimos partidos</div>
+          <div className="space-y-1.5 rounded-lg bg-gray-50 p-3 border c-bd-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide c-text-2 mb-2">Últimos {perfil.ultimos.length} partidos jugados</div>
             {perfil.ultimos.map((p) => (
-              <div key={p.id} className="text-xs flex justify-between c-text-2 border-b c-bd-1-60 last:border-0 pb-1 last:pb-0">
-                <span>{p.aLabel} {p.pa} – {p.pb} {p.bLabel}</span>
+              <div key={p.id} className="text-xs flex justify-between items-center c-text-2 border-b c-bd-1-60 last:border-0 pb-1.5 mb-1.5 last:pb-0 last:mb-0">
+                <span>{p.aLabel} <span className="font-mono">{p.pa} – {p.pb}</span> {p.bLabel}</span>
                 <span className={p.ganador === nombre ? "c-text-green font-bold" : "c-text-red2 font-bold"}>{p.ganador === nombre ? "Ganó" : "Perdió"}</span>
               </div>
             ))}
           </div>
-        )}
-
-        {!modoEspectador && (
-          <button onClick={() => onEliminar(nombre)} className="w-full rounded-lg border c-bd-red-40 c-text-red2 font-bold py-2 mt-4 text-sm bg-red-50 hover:bg-red-100 active:scale-95 transition-transform">
-            Eliminar Cuenta Permanentemente
-          </button>
         )}
       </div>
     </div>
@@ -1130,10 +1221,11 @@ export default function CasaApuestasPingpong() {
 
   const [resolviendoCustoms, setResolviendoCustoms] = useState(null);
 
-  // Estados para acciones protegidas por contraseña (Borrar cuenta / Anular apuesta)
   const [accionProtegida, setAccionProtegida] = useState(null);
   const [pwdProtegida, setPwdProtegida] = useState("");
   const [errProtegida, setErrProtegida] = useState("");
+  const [modalDonar, setModalDonar] = useState(null);
+  const [cantidadDonar, setCantidadDonar] = useState("");
 
   const prevSlipLen = useRef(0);
 
@@ -1180,7 +1272,7 @@ export default function CasaApuestasPingpong() {
       }
       return { ...s, cuota: Number(nuevaCuota.toFixed(2)) };
     }));
-  }, [estado?.partidoAbierto?.boosts, estado?.margen]);
+  }, [estado?.partidoAbierto?.boosts, estado?.margen, estado?.historial]);
 
   useEffect(() => {
     if (slip.length > prevSlipLen.current) {
@@ -1192,10 +1284,15 @@ export default function CasaApuestasPingpong() {
     prevSlipLen.current = slip.length;
   }, [slip.length]);
 
-  const persistir = useCallback(async (nuevo) => {
-    setEstado(nuevo);
-    await guardarEstado(nuevo);
+  const persistir = useCallback((updater) => {
+    setEstado(updater);
   }, []);
+
+  useEffect(() => {
+    if (estado && !cargando) {
+      guardarEstado(estado);
+    }
+  }, [estado, cargando]);
 
   if (cargando || !estado) {
     return (
@@ -1243,6 +1340,7 @@ export default function CasaApuestasPingpong() {
 
   function pasarAEspectador() {
     setModoEspectador(true);
+    setModoEditarCuotas(false);
   }
 
   function solicitarAccionProtegida(tipo, payload) {
@@ -1258,45 +1356,59 @@ export default function CasaApuestasPingpong() {
     }
     if (accionProtegida.tipo === 'anular_apuesta') {
       realizarAnulacionApuesta(accionProtegida.payload);
-    } else if (accionProtegida.tipo === 'eliminar_cuenta') {
-      realizarEliminacionCuenta(accionProtegida.payload);
+    } else if (accionProtegida.tipo === 'eliminar_apostante') {
+      realizarEliminacionApostante(accionProtegida.payload);
     }
     setAccionProtegida(null);
   }
 
   function realizarAnulacionApuesta(idApuesta) {
-    const ap = partido.apuestas.find(a => a.id === idApuesta);
-    if (!ap) return;
-    const nuevosBettors = {...estado.bettors};
-    if (ap.estado === "pendiente") {
-      nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
-    }
-    const nuevoPartido = {...partido, apuestas: partido.apuestas.filter(a => a.id !== idApuesta)};
-    persistir({...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido});
+    persistir(prev => {
+      if (!prev.partidoAbierto) return prev;
+      
+      const ap = prev.partidoAbierto.apuestas.find(a => a.id === idApuesta);
+      if (!ap) return prev;
+      
+      const nuevosBettors = { ...prev.bettors };
+      if (ap.estado === "pendiente") {
+        nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
+      }
+      
+      const nuevoPartido = { 
+        ...prev.partidoAbierto, 
+        apuestas: prev.partidoAbierto.apuestas.filter(a => a.id !== idApuesta) 
+      };
+      
+      return { ...prev, bettors: nuevosBettors, partidoAbierto: nuevoPartido };
+    });
   }
 
-  function realizarEliminacionCuenta(nombre) {
-    const nuevosJugadores = { ...estado.jugadores };
-    delete nuevosJugadores[nombre];
+  function realizarEliminacionApostante(nombre) {
+    persistir(prev => {
+      const nuevosBettors = { ...prev.bettors };
+      delete nuevosBettors[nombre];
 
-    const nuevosBettors = { ...estado.bettors };
-    delete nuevosBettors[nombre];
-
-    const nuevosVetados = (estado.vetados || []).filter(n => n !== nombre);
-    
-    let gmNuevo = estado.gm === nombre ? null : estado.gm;
-    let pendienteNuevo = estado.pendiente === nombre ? null : estado.pendiente;
-
-    persistir({
-      ...estado,
-      jugadores: nuevosJugadores,
-      bettors: nuevosBettors,
-      vetados: nuevosVetados,
-      gm: gmNuevo,
-      pendiente: pendienteNuevo
+      const nuevosVetados = (prev.vetados || []).filter(n => n !== nombre);
+      
+      return {
+        ...prev,
+        bettors: nuevosBettors,
+        vetados: nuevosVetados
+      };
     });
+  }
 
-    setPerfilAbierto(null);
+  function procesarDonacion() {
+    const qty = Number(cantidadDonar.replace(',', '.'));
+    if (isNaN(qty)) return;
+    
+    persistir(prev => {
+      const nuevosBettors = { ...prev.bettors };
+      nuevosBettors[modalDonar] = Number(((nuevosBettors[modalDonar] || 0) + qty).toFixed(2));
+      return { ...prev, bettors: nuevosBettors };
+    });
+    setModalDonar(null);
+    setCantidadDonar("");
   }
 
   function exportarHistorial() {
@@ -1365,18 +1477,23 @@ export default function CasaApuestasPingpong() {
     const { mercado, seleccion } = editarCuotaObjetivo;
     const valorLimpio = editarCuotaInput.trim().replace(',', '.');
     const val = valorLimpio ? Number(valorLimpio) : null;
-    
+
     if (valorLimpio && (!val || val < 1.01)) {
       setError("La cuota debe ser 1.01 o más.");
       return;
     }
-    const nuevosBoosts = { ...(partido.boosts || {}) };
-    const clave = claveBoost(mercado, seleccion);
     
-    if (val) nuevosBoosts[clave] = Number(val.toFixed(2));
-    else delete nuevosBoosts[clave];
+    persistir(prev => {
+      if (!prev.partidoAbierto) return prev;
+      const nuevosBoosts = { ...(prev.partidoAbierto.boosts || {}) };
+      const clave = claveBoost(mercado, seleccion);
+
+      if (val) nuevosBoosts[clave] = Number(val.toFixed(2));
+      else delete nuevosBoosts[clave];
+
+      return { ...prev, partidoAbierto: { ...prev.partidoAbierto, boosts: nuevosBoosts } };
+    });
     
-    persistir({ ...estado, partidoAbierto: { ...partido, boosts: nuevosBoosts } });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
     setError("");
@@ -1384,18 +1501,24 @@ export default function CasaApuestasPingpong() {
 
   function bloquearCuota() {
     const { mercado, seleccion } = editarCuotaObjetivo;
-    const nuevosBoosts = { ...(partido.boosts || {}) };
-    nuevosBoosts[claveBoost(mercado, seleccion)] = "LOCKED";
-    persistir({ ...estado, partidoAbierto: { ...partido, boosts: nuevosBoosts } });
+    persistir(prev => {
+      if (!prev.partidoAbierto) return prev;
+      const nuevosBoosts = { ...(prev.partidoAbierto.boosts || {}) };
+      nuevosBoosts[claveBoost(mercado, seleccion)] = "LOCKED";
+      return { ...prev, partidoAbierto: { ...prev.partidoAbierto, boosts: nuevosBoosts } };
+    });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
   }
 
   function quitarCuotaEditada() {
     if (!editarCuotaObjetivo) return;
-    const nuevosBoosts = { ...(partido.boosts || {}) };
-    delete nuevosBoosts[claveBoost(editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion)];
-    persistir({ ...estado, partidoAbierto: { ...partido, boosts: nuevosBoosts } });
+    persistir(prev => {
+      if (!prev.partidoAbierto) return prev;
+      const nuevosBoosts = { ...(prev.partidoAbierto.boosts || {}) };
+      delete nuevosBoosts[claveBoost(editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion)];
+      return { ...prev, partidoAbierto: { ...prev.partidoAbierto, boosts: nuevosBoosts } };
+    });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
   }
@@ -1423,7 +1546,8 @@ export default function CasaApuestasPingpong() {
     const conflicto = slip.find((s) => sonContradictorias(s, nuevaSel, partido));
     
     if (conflicto) {
-      setError(`"${seleccion}" entra en conflicto lógico con "${conflicto.seleccion}". Son apuestas contradictorias o redundantes.`);
+      setSlipError(`Lógicamente imposible: "${seleccion}" choca con "${conflicto.seleccion}".`);
+      setSlipOpen(true);
       return;
     }
 
@@ -1457,7 +1581,9 @@ export default function CasaApuestasPingpong() {
       const stakeVal = Number(stakeCombinada.replace(',', '.')) || 0;
       if (stakeVal <= 0) { setSlipError("Pon una cantidad de fichas válida."); return; }
       if (saldoActual < stakeVal) { setSlipError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas.`); return; }
-      const cuotaTotal = Math.max(1.01, Number((slip.reduce((acc, s) => acc * s.cuota, 1) * bonus).toFixed(2)));
+      
+      const cuotaSGP = calcularCuotaSGP(slip, mercados, partido, estado.margen);
+      const cuotaTotal = Number((cuotaSGP * bonus).toFixed(2));
       
       const apuesta = {
         id: Date.now(), bettor: nombre, tipo: "combinada",
@@ -1468,9 +1594,6 @@ export default function CasaApuestasPingpong() {
       const nuevoPartido = { ...partido, apuestas: [...partido.apuestas, apuesta] };
       persistir({ ...estado, bettors: nuevosBettors, partidoAbierto: nuevoPartido });
       setTicketVisible({ bettor: nombre, apuestas: [apuesta] });
-      if (slip.some((s) => typeof boostDe(partido, s.mercado, s.seleccion) === "number" && boostDe(partido, s.mercado, s.seleccion) > s.cuota)) {
-        setCelebracion({ nombre, tipo: "supercuota" });
-      }
       setSlip([]); setSlipOpen(false); setBettorSlip(""); setStakeCombinada("50");
       return;
     }
@@ -1519,15 +1642,28 @@ export default function CasaApuestasPingpong() {
   }
 
   function eliminarMercadoCustom(idCustom) {
-    const listaActual = partido.mercadosCustom || [];
-    const partidoActualizado = { ...partido, mercadosCustom: listaActual.filter(item => item.id !== idCustom) };
-    persistir({ ...estado, partidoAbierto: partidoActualizado });
+    persistir(prev => {
+      if (!prev.partidoAbierto) return prev;
+      const listaActual = prev.partidoAbierto.mercadosCustom || [];
+      return { 
+        ...prev, 
+        partidoAbierto: { 
+          ...prev.partidoAbierto, 
+          mercadosCustom: listaActual.filter(item => item.id !== idCustom) 
+        } 
+      };
+    });
   }
 
   function toggleVeto(nombre) {
-    const vetados = estado.vetados || [];
-    if (vetados.includes(nombre)) persistir({...estado, vetados: vetados.filter(n => n !== nombre)});
-    else persistir({...estado, vetados: [...vetados, nombre]});
+    persistir(prev => {
+      const vetados = prev.vetados || [];
+      if (vetados.includes(nombre)) {
+        return { ...prev, vetados: vetados.filter(n => n !== nombre) };
+      } else {
+        return { ...prev, vetados: [...vetados, nombre] };
+      }
+    });
   }
 
   function iniciarCierrePartido() {
@@ -1678,9 +1814,10 @@ export default function CasaApuestasPingpong() {
   const variacionB0 = puntosBVivo ? ladoConSentido(puntosBVivo.cuotaMas, puntosBVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const handicapLados0 = handicapVivo ? ladoConSentido(handicapVivo.cuotaA, handicapVivo.cuotaB) : { mostrarMas: true, mostrarMenos: true };
 
-  const variacionA = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : variacionA0;
-  const variacionB = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : variacionB0;
-  const handicapLados = modoEditarCuotas && !modoEspectador ? { mostrarMas: true, mostrarMenos: true } : handicapLados0;
+  const isEditing = modoEditarCuotas && !modoEspectador;
+  const variacionA = isEditing ? { mostrarMas: true, mostrarMenos: true } : variacionA0;
+  const variacionB = isEditing ? { mostrarMas: true, mostrarMenos: true } : variacionB0;
+  const handicapLados = isEditing ? { mostrarMas: true, mostrarMenos: true } : handicapLados0;
   const bHandicapA = handicapVivo ? conBoost(`Hándicap ${handicapKClamp}`, partido.a, handicapVivo.cuotaA) : null;
   const bHandicapB = handicapVivo ? conBoost(`Hándicap ${handicapKClamp}`, partido.b, handicapVivo.cuotaB) : null;
   const bPuntosAMas = puntosAVivo ? conBoost(`Puntos ${partido?.a} ${lineaAClamp}`, "Más", puntosAVivo.cuotaMas) : null;
@@ -1721,6 +1858,7 @@ export default function CasaApuestasPingpong() {
   const resto = rankingBettors.slice(3);
   const estadisticasApostantes = calcularEstadisticasApostantes(estado.historial, estado.bettors);
   const rankingEstilo = calcularRankingEstilo(estado.historial);
+  const statsCampos = calcularEstadisticasGlobales(estado.historial);
 
   const TABS = [
     { id: "partido", label: "Apuestas", icon: Swords },
@@ -1766,6 +1904,12 @@ export default function CasaApuestasPingpong() {
         .c-bg-green { background-color: #16A34A !important; }
         .c-bg-green-soft { background-color: #DCFCE7 !important; }
         .c-bg-blue-soft { background-color: #DBEAFE !important; }
+        
+        .c-bg-blue { background-color: #3B82F6 !important; }
+        .c-text-blue { color: #2563EB !important; }
+        .c-bg-teal { background-color: #14B8A6 !important; }
+        .c-text-teal { color: #0D9488 !important; }
+
         .c-grad-panel { background: linear-gradient(to bottom, #FBFCFD, #FFFFFF) !important; }
         .c-grad-banner { background: linear-gradient(to right, #F3F5F8, #FFFFFF) !important; }
         .c-grad-podio { background: linear-gradient(to top, #F3F5F8, #DDE2E9) !important; }
@@ -1797,7 +1941,6 @@ export default function CasaApuestasPingpong() {
         .c-text-gold { color: #7A5D18 !important; }
         .c-text-red { color: #C81E1E !important; }
         .c-text-red2 { color: #B91C1C !important; }
-        .c-text-blue { color: #1D4ED8 !important; }
 
         .c-shadow-glow-orange { box-shadow: 0 0 16px rgba(255,90,31,0.45) !important; }
         .c-shadow-card { box-shadow: 0 2px 10px rgba(15,23,42,0.08) !important; }
@@ -1836,6 +1979,8 @@ export default function CasaApuestasPingpong() {
           </div>
         </div>
         <div className="c-red-net h-[3px] w-full mt-3 rounded-full opacity-70" />
+        <p className="text-[10px] c-text-3 font-semibold mt-1">Donde se demuestra quién tiene de verdad madera de campeones.</p>
+        
         {modoEspectador && (
           <div className="mt-1.5"><Chip tone="info">👁️ Espectador: apostar sí, gestión con clave</Chip></div>
         )}
@@ -1852,7 +1997,7 @@ export default function CasaApuestasPingpong() {
 
       <div className="p-3 space-y-3">
         {error && (
-          <div className="text-sm c-bg-red-soft border c-bd-red-40 c-text-red2 rounded-lg px-3 py-2 flex justify-between">
+          <div className="text-sm c-bg-red-soft border c-bd-red-40 c-text-red2 rounded-lg px-3 py-2 flex justify-between shadow-sm">
             <span>{error}</span>
             <button onClick={() => setError("")}><X size={14} /></button>
           </div>
@@ -1939,7 +2084,7 @@ export default function CasaApuestasPingpong() {
               <div className="flex items-center justify-between">
                 <Chip tone="live">● en juego</Chip>
                 {partido.esGM && <Chip tone="gold"><Crown size={10} className="inline -mt-0.5" /> título en juego</Chip>}
-                {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">cancelar partido (devuelve puntos)</button>}
+                {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">cancelar partido</button>}
               </div>
               <div className="flex items-center gap-2 mt-2">
                 <Avatar name={partido.a} size={32} />
@@ -2002,8 +2147,8 @@ export default function CasaApuestasPingpong() {
                 </div>
               )}
               <div className="flex gap-2">
-                <BotonCuota etiqueta={partido.a} valor={bGanadorA.valor} valorBase={bGanadorA.base} boosteado={bGanadorA.boosteado} locked={bGanadorA.locked} activo={!!estaEnSlip("Ganador", partido.a)} onClick={() => manejarClicCuota("Ganador", partido.a, ganadorConDinero.A, partido.a)} />
-                <BotonCuota etiqueta={partido.b} valor={bGanadorB.valor} valorBase={bGanadorB.base} boosteado={bGanadorB.boosteado} locked={bGanadorB.locked} activo={!!estaEnSlip("Ganador", partido.b)} onClick={() => manejarClicCuota("Ganador", partido.b, ganadorConDinero.B, partido.b)} />
+                <BotonCuota isEditing={isEditing} etiqueta={partido.a} valor={bGanadorA.valor} valorBase={bGanadorA.base} boosteado={bGanadorA.boosteado} locked={bGanadorA.locked} activo={!!estaEnSlip("Ganador", partido.a)} onClick={() => manejarClicCuota("Ganador", partido.a, ganadorConDinero.A, partido.a)} />
+                <BotonCuota isEditing={isEditing} etiqueta={partido.b} valor={bGanadorB.valor} valorBase={bGanadorB.base} boosteado={bGanadorB.boosteado} locked={bGanadorB.locked} activo={!!estaEnSlip("Ganador", partido.b)} onClick={() => manejarClicCuota("Ganador", partido.b, ganadorConDinero.B, partido.b)} />
               </div>
             </Panel>
 
@@ -2023,7 +2168,7 @@ export default function CasaApuestasPingpong() {
               <div className="space-y-2">
                 <div className="flex gap-2">
                   {cuotaPtsA !== null && ptsCreatorA !== "" && (
-                     <BotonCuota 
+                     <BotonCuota isEditing={isEditing}
                        etiqueta={`${partido.a} hace`} sub={`${ptsCreatorA} pts exactos`} 
                        valor={bPtsA?.valor ?? cuotaPtsA} valorBase={cuotaPtsA} boosteado={bPtsA?.boosteado} locked={bPtsA?.locked}
                        activo={!!estaEnSlip(`Puntos Exactos ${partido.a}`, String(pAInt))} 
@@ -2031,7 +2176,7 @@ export default function CasaApuestasPingpong() {
                      />
                   )}
                   {cuotaPtsB !== null && ptsCreatorB !== "" && (
-                     <BotonCuota 
+                     <BotonCuota isEditing={isEditing}
                        etiqueta={`${partido.b} hace`} sub={`${ptsCreatorB} pts exactos`} 
                        valor={bPtsB?.valor ?? cuotaPtsB} valorBase={cuotaPtsB} boosteado={bPtsB?.boosteado} locked={bPtsB?.locked}
                        activo={!!estaEnSlip(`Puntos Exactos ${partido.b}`, String(pBInt))} 
@@ -2042,7 +2187,7 @@ export default function CasaApuestasPingpong() {
                 
                 {isValScore && cuotaPartido !== null && (
                    <div className="pt-1 border-t c-bd-1 mt-1">
-                     <BotonCuota 
+                     <BotonCuota isEditing={isEditing}
                        etiqueta="Terminan exactamente" sub={`${pAInt} - ${pBInt}`} 
                        valor={bResPartido?.valor ?? cuotaPartido} valorBase={cuotaPartido} boosteado={bResPartido?.boosteado} locked={bResPartido?.locked}
                        activo={!!estaEnSlip(`Resultado Exacto Partido`, `${pAInt}-${pBInt}`)} 
@@ -2067,7 +2212,7 @@ export default function CasaApuestasPingpong() {
                     return (
                       <div key={custom.id} className="flex items-center gap-2">
                         <div className="flex-1">
-                          <BotonCuota 
+                          <BotonCuota isEditing={isEditing}
                             etiqueta={`${custom.mercado}: ${custom.seleccion}`} 
                             valor={bCustom.valor ?? custom.cuota} 
                             valorBase={custom.cuota} 
@@ -2098,8 +2243,8 @@ export default function CasaApuestasPingpong() {
                 </div>
                 {handicapVivo && (handicapLados.mostrarMas || handicapLados.mostrarMenos) && (
                   <div className="flex gap-2">
-                    {handicapLados.mostrarMas && <BotonCuota etiqueta={`Gana ${partido.a}`} valor={bHandicapA.valor} valorBase={bHandicapA.base} boosteado={bHandicapA.boosteado} locked={bHandicapA.locked} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.a)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.a, handicapVivo.cuotaA, `Gana ${partido.a}`)} />}
-                    {handicapLados.mostrarMenos && <BotonCuota etiqueta={`Gana ${partido.b}`} valor={bHandicapB.valor} valorBase={bHandicapB.base} boosteado={bHandicapB.boosteado} locked={bHandicapB.locked} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.b)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.b, handicapVivo.cuotaB, `Gana ${partido.b}`)} />}
+                    {handicapLados.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta={`Gana ${partido.a}`} valor={bHandicapA.valor} valorBase={bHandicapA.base} boosteado={bHandicapA.boosteado} locked={bHandicapA.locked} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.a)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.a, handicapVivo.cuotaA, `Gana ${partido.a}`)} />}
+                    {handicapLados.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta={`Gana ${partido.b}`} valor={bHandicapB.valor} valorBase={bHandicapB.base} boosteado={bHandicapB.boosteado} locked={bHandicapB.locked} activo={!!estaEnSlip(`Hándicap ${handicapKClamp}`, partido.b)} onClick={() => manejarClicCuota(`Hándicap ${handicapKClamp}`, partido.b, handicapVivo.cuotaB, `Gana ${partido.b}`)} />}
                   </div>
                 )}
               </div>
@@ -2116,8 +2261,8 @@ export default function CasaApuestasPingpong() {
                   </div>
                   {puntosAVivo && (variacionA.mostrarMas || variacionA.mostrarMenos) && (
                     <div className="flex gap-2 mt-1">
-                      {variacionA.mostrarMas && <BotonCuota etiqueta="Más de" sub={`${lineaAClamp}`} valor={bPuntosAMas.valor} valorBase={bPuntosAMas.base} boosteado={bPuntosAMas.boosteado} locked={bPuntosAMas.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Más", puntosAVivo.cuotaMas, `${partido.a} más de ${lineaAClamp}`)} />}
-                      {variacionA.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaAClamp}`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} locked={bPuntosAMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}`)} />}
+                      {variacionA.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta="Más de" sub={`${lineaAClamp}`} valor={bPuntosAMas.valor} valorBase={bPuntosAMas.base} boosteado={bPuntosAMas.boosteado} locked={bPuntosAMas.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Más", puntosAVivo.cuotaMas, `${partido.a} más de ${lineaAClamp}`)} />}
+                      {variacionA.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta="Menos de" sub={`${lineaAClamp}`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} locked={bPuntosAMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}`)} />}
                     </div>
                   )}
                 </div>
@@ -2130,8 +2275,8 @@ export default function CasaApuestasPingpong() {
                   </div>
                   {puntosBVivo && (variacionB.mostrarMas || variacionB.mostrarMenos) && (
                     <div className="flex gap-2 mt-1">
-                      {variacionB.mostrarMas && <BotonCuota etiqueta="Más de" sub={`${lineaBClamp}`} valor={bPuntosBMas.valor} valorBase={bPuntosBMas.base} boosteado={bPuntosBMas.boosteado} locked={bPuntosBMas.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Más", puntosBVivo.cuotaMas, `${partido.b} más de ${lineaBClamp}`)} />}
-                      {variacionB.mostrarMenos && <BotonCuota etiqueta="Menos de" sub={`${lineaBClamp}`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} locked={bPuntosBMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}`)} />}
+                      {variacionB.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta="Más de" sub={`${lineaBClamp}`} valor={bPuntosBMas.valor} valorBase={bPuntosBMas.base} boosteado={bPuntosBMas.boosteado} locked={bPuntosBMas.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Más", puntosBVivo.cuotaMas, `${partido.b} más de ${lineaBClamp}`)} />}
+                      {variacionB.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta="Menos de" sub={`${lineaBClamp}`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} locked={bPuntosBMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}`)} />}
                     </div>
                   )}
                 </div>
@@ -2140,9 +2285,9 @@ export default function CasaApuestasPingpong() {
 
             <Panel icon={Trophy} titulo="Cómo termina el partido">
               <div className="flex gap-2">
-                <BotonCuota etiqueta="Parciales (rival ≤2)" valor={bComoParciales.valor} valorBase={bComoParciales.base} boosteado={bComoParciales.boosteado} locked={bComoParciales.locked} activo={!!estaEnSlip("Cómo termina", "parciales")} onClick={() => manejarClicCuota("Cómo termina", "parciales", mercados.comoTermina.parciales, "Parciales")} />
-                <BotonCuota etiqueta="Normal (3-19)" valor={bComoNormal.valor} valorBase={bComoNormal.base} boosteado={bComoNormal.boosteado} locked={bComoNormal.locked} activo={!!estaEnSlip("Cómo termina", "normal")} onClick={() => manejarClicCuota("Cómo termina", "normal", mercados.comoTermina.normal, "Normal")} />
-                <BotonCuota etiqueta="Ajustado (deuce)" valor={bComoAjustado.valor} valorBase={bComoAjustado.base} boosteado={bComoAjustado.boosteado} locked={bComoAjustado.locked} activo={!!estaEnSlip("Cómo termina", "ajustado")} onClick={() => manejarClicCuota("Cómo termina", "ajustado", mercados.comoTermina.ajustado, "Ajustado")} />
+                <BotonCuota isEditing={isEditing} etiqueta="Parciales (rival ≤2)" valor={bComoParciales.valor} valorBase={bComoParciales.base} boosteado={bComoParciales.boosteado} locked={bComoParciales.locked} activo={!!estaEnSlip("Cómo termina", "parciales")} onClick={() => manejarClicCuota("Cómo termina", "parciales", mercados.comoTermina.parciales, "Parciales")} />
+                <BotonCuota isEditing={isEditing} etiqueta="Normal (3-19)" valor={bComoNormal.valor} valorBase={bComoNormal.base} boosteado={bComoNormal.boosteado} locked={bComoNormal.locked} activo={!!estaEnSlip("Cómo termina", "normal")} onClick={() => manejarClicCuota("Cómo termina", "normal", mercados.comoTermina.normal, "Normal")} />
+                <BotonCuota isEditing={isEditing} etiqueta="Ajustado (deuce)" valor={bComoAjustado.valor} valorBase={bComoAjustado.base} boosteado={bComoAjustado.boosteado} locked={bComoAjustado.locked} activo={!!estaEnSlip("Cómo termina", "ajustado")} onClick={() => manejarClicCuota("Cómo termina", "ajustado", mercados.comoTermina.ajustado, "Ajustado")} />
               </div>
               <p className="text-[10px] c-text-2 mt-1">Parciales: 7-0, 9-1, 11-2 o que el rival no pase de 2 (ej. 21-2). Normal: Terminar a 21 con el rival haciendo entre 3 y 19. Ajustado: 22-20, 23-21...</p>
             </Panel>
@@ -2175,11 +2320,11 @@ export default function CasaApuestasPingpong() {
             {!modoEspectador && (
               <Panel icon={Check} titulo="Registrar resultado final">
                 <div className="flex items-center gap-2">
-                  <input inputMode="numeric" placeholder={partido.a} value={marcador.a} onChange={(e) => setMarcador({ ...marcador, a: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
-                  <span className="c-text-2">–</span>
-                  <input inputMode="numeric" placeholder={partido.b} value={marcador.b} onChange={(e) => setMarcador({ ...marcador, b: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
+                  <input inputMode="numeric" placeholder={partido.a} value={marcador.a} onChange={(e) => setMarcador({ ...marcador, a: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1 shadow-sm" />
+                  <span className="c-text-2 font-bold">–</span>
+                  <input inputMode="numeric" placeholder={partido.b} value={marcador.b} onChange={(e) => setMarcador({ ...marcador, b: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1 shadow-sm" />
                 </div>
-                <button onClick={iniciarCierrePartido} className="w-full mt-2 rounded-lg c-bg-green c-text-green-dark font-bold py-2.5 active:scale-95 transition-transform">
+                <button onClick={iniciarCierrePartido} className="w-full mt-2 rounded-lg c-bg-green c-text-green-dark font-bold py-2.5 active:scale-95 transition-transform shadow-sm">
                   Cerrar mesa y liquidar apuestas
                 </button>
               </Panel>
@@ -2192,11 +2337,12 @@ export default function CasaApuestasPingpong() {
             {!modoEspectador && (
               <Panel icon={Plus} titulo="Dar de alta un jugador">
                 <div className="flex gap-2">
-                  <input value={nuevoJugador} onChange={(e) => setNuevoJugador(e.target.value)} placeholder="Nombre" className="flex-1 rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
-                  <button onClick={agregarJugador} className="rounded-lg c-bg-orange c-text-dark-on-accent px-4 font-bold active:scale-95 transition-transform">Añadir</button>
+                  <input value={nuevoJugador} onChange={(e) => setNuevoJugador(e.target.value)} placeholder="Nombre" className="flex-1 rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1 shadow-inner" />
+                  <button onClick={agregarJugador} className="rounded-lg c-bg-orange c-text-dark-on-accent px-4 font-bold active:scale-95 transition-transform shadow-sm">Añadir</button>
                 </div>
               </Panel>
             )}
+            
             <Panel icon={Users} titulo="Ranking actual">
               {nombresJugadores.length === 0 ? (
                 <p className="text-sm c-text-2">Todavía no hay jugadores.</p>
@@ -2204,16 +2350,20 @@ export default function CasaApuestasPingpong() {
                 <div className="space-y-1">
                   {nombresJugadores.slice().sort((a, b) => estado.jugadores[b] - estado.jugadores[a]).map((n, i) => {
                     const racha = calcularRacha(estado.historial, n);
+                    const stats = statsCampos.porJugador[n] || { cV:0, cD:0, kV:0, kD:0 };
+                    const totalMatches = stats.cV + stats.cD + stats.kV + stats.kD;
+                    
                     return (
                     <button key={n} onClick={() => setPerfilAbierto(n)} className="w-full flex items-center justify-between rounded-lg c-bg-app px-3 py-2 border c-bd-2 text-left active:scale-[0.98] transition-transform">
                       <div className="flex items-center gap-2 text-sm font-medium c-text-1 min-w-0">
                         <span className="c-text-2 text-xs w-4 shrink-0">{i + 1}</span>
                         <Avatar name={n} size={24} />
-                        <span className="truncate">{n}</span>
-                        {estado.gm === n && <Crown size={14} className="c-text-gold shrink-0" />}
+                        <span className="truncate font-semibold">{n}</span>
+                        <span className="text-[9px] bg-white border c-bd-1 px-1.5 py-0.5 rounded-md c-text-3 font-semibold ml-0.5 shrink-0 shadow-sm">{totalMatches} p.</span>
+                        {estado.gm === n && <Crown size={14} className="c-text-gold shrink-0 ml-1" />}
                         {estado.pendiente === n && <Chip tone="live">retador</Chip>}
-                        {Math.abs(racha) >= 3 && <span className="shrink-0">{racha > 0 ? "🔥" : "❄️"}</span>}
-                        {!estado.gm && !modoEspectador && <span onClick={(e) => { e.stopPropagation(); fijarGMInicial(n); }} className="text-[10px] underline c-text-orange shrink-0">hacer GM</span>}
+                        {Math.abs(racha) >= 3 && <span className="shrink-0 ml-1">{racha > 0 ? "🔥" : "❄️"}</span>}
+                        {!estado.gm && !modoEspectador && <span onClick={(e) => { e.stopPropagation(); fijarGMInicial(n); }} className="text-[10px] underline c-text-orange shrink-0 ml-1">hacer GM</span>}
                       </div>
                       <span className="font-mono text-sm c-text-orange font-bold shrink-0">{estado.jugadores[n].toFixed(2)}</span>
                     </button>
@@ -2223,7 +2373,58 @@ export default function CasaApuestasPingpong() {
               )}
             </Panel>
 
-            <Panel icon={Ticket} titulo="🎲 Mejor tahúr del verano">
+            <Panel icon={Target} titulo="📊 Estadísticas Globales">
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                 <div className="c-bg-app p-3 rounded-lg border c-bd-2 text-center shadow-sm">
+                    <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Partidos Jugados</div>
+                    <div className="font-bold text-2xl c-text-1">{estado.historial.length}</div>
+                 </div>
+                 <div className="c-bg-app p-3 rounded-lg border c-bd-2 text-center shadow-sm">
+                    <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Fichas en Circuito</div>
+                    <div className="font-bold text-2xl c-text-orange">
+                       {Object.values(estado.bettors).reduce((a,b) => a + b, 0).toFixed(0)}
+                    </div>
+                 </div>
+              </div>
+
+              {estado.historial.length > 0 && (
+                <div className="space-y-4">
+                  {/* RESUMEN GLOBAL CAMPOS */}
+                  <div className="bg-white border c-bd-2 rounded-xl p-3 shadow-sm border-l-4" style={{borderLeftColor: '#3B82F6'}}>
+                     <h4 className="text-[10px] uppercase font-bold c-text-2 mb-2 flex items-center gap-1"><MapPin size={12}/> Visión Global de Campos</h4>
+                     <StatBar 
+                        title="Victoria media por lado de mesa" 
+                        w={statsCampos.totales.canasta} 
+                        l={statsCampos.totales.columpios} 
+                        barClass="c-bg-blue"
+                        textClass="c-text-blue" 
+                     />
+                     <div className="flex justify-between text-[10px] c-text-3 font-semibold mt-1">
+                        <span>Lado Canasta ({statsCampos.totales.canasta}V)</span>
+                        <span>Lado Columpios ({statsCampos.totales.columpios}V)</span>
+                     </div>
+                  </div>
+
+                  {/* RESUMEN GLOBAL CLIMA */}
+                  <div className="bg-white border c-bd-2 rounded-xl p-3 shadow-sm border-l-4" style={{borderLeftColor: '#EAB308'}}>
+                     <h4 className="text-[10px] uppercase font-bold c-text-2 mb-2 flex items-center gap-1"><Sun size={12}/> Impacto del Sol</h4>
+                     <StatBar 
+                        icon={Sun} 
+                        title="Sobrevivir al Sol en contra" 
+                        w={statsCampos.totales.solMataJugador} 
+                        l={statsCampos.totales.solTot - statsCampos.totales.solMataJugador} 
+                        barClass="c-bg-gold"
+                        textClass="c-text-gold" 
+                     />
+                     <p className="text-[9px] c-text-4 text-center mt-2 leading-tight px-2">
+                        Porcentaje de partidos donde el jugador que tenía el sol molestándole de cara consiguió sobreponerse y ganar.
+                     </p>
+                  </div>
+                </div>
+              )}
+            </Panel>
+
+            <Panel icon={Ticket} titulo="🎲 Mejor ludao del verano">
               {rankingBettors.length === 0 ? (
                 <p className="text-sm c-text-2">Nadie ha apostado todavía. Cada apostante empieza con 500 fichas.</p>
               ) : (
@@ -2238,9 +2439,16 @@ export default function CasaApuestasPingpong() {
                         const medalla = idx === 1 ? "🥇" : idx === 0 ? "🥈" : "🥉";
                         const vetado = estado.vetados?.includes(n);
                         return (
-                          <div key={n} className="flex flex-col items-center gap-1 w-16 relative">
-                            {vetado && <div className="absolute top-0 right-0 c-text-red2"><Ban size={14} /></div>}
-                            <Avatar name={n} size={26} />
+                          <div key={n} className="flex flex-col items-center gap-1 w-16 relative group">
+                            {vetado && <div className="absolute top-0 right-0 c-text-red2 z-10"><Ban size={14} /></div>}
+                            <div className="relative">
+                              <Avatar name={n} size={26} />
+                              {!modoEspectador && (
+                                <button onClick={() => setModalDonar(n)} className="absolute -top-1 -right-2 bg-green-500 text-white rounded-full p-0.5 shadow-md active:scale-90 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <Gift size={12} />
+                                </button>
+                              )}
+                            </div>
                             <div className="text-[10px] c-text-1 font-semibold truncate w-full text-center">{n}</div>
                             <div className={`w-full ${alturaOrden} rounded-t-md c-grad-podio border c-bd-2b flex flex-col items-center justify-end pb-1`}>
                               <span className="text-lg">{medalla}</span>
@@ -2248,7 +2456,10 @@ export default function CasaApuestasPingpong() {
                             </div>
                             {est.total > 0 && <div className="text-[9px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</div>}
                             {!modoEspectador && (
-                               <button onClick={() => toggleVeto(n)} className="text-[8px] uppercase underline mt-1 c-text-3">{vetado ? "Quitar Veto" : "Vetar"}</button>
+                               <div className="flex flex-col items-center mt-1">
+                                 <button onClick={() => toggleVeto(n)} className="text-[8px] uppercase underline c-text-3 mb-1">{vetado ? "Quitar Veto" : "Vetar"}</button>
+                                 <button onClick={() => solicitarAccionProtegida('eliminar_apostante', n)} className="c-text-red2 opacity-50 hover:opacity-100 transition-opacity p-1" title="Eliminar cuenta de apuestas"><Trash2 size={12} /></button>
+                               </div>
                             )}
                           </div>
                         );
@@ -2259,7 +2470,7 @@ export default function CasaApuestasPingpong() {
                     const est = estadisticasApostantes[n] || { total: 0, aciertos: 0 };
                     const vetado = estado.vetados?.includes(n);
                     return (
-                      <div key={n} className="flex justify-between items-center text-sm px-1 py-1">
+                      <div key={n} className="flex justify-between items-center text-sm px-1 py-1 group">
                         <span className="flex items-center gap-2 c-text-3">
                            <span className="text-xs c-text-2 w-4">{i + 4}</span>
                            <div className="relative">
@@ -2272,7 +2483,11 @@ export default function CasaApuestasPingpong() {
                           {est.total > 0 && <span className="text-[10px] c-text-2">{est.aciertos}/{est.total} ({Math.round(100 * est.aciertos / est.total)}%)</span>}
                           <span className="font-mono font-bold c-text-1">{saldo.toFixed(2)}</span>
                           {!modoEspectador && (
-                             <button onClick={() => toggleVeto(n)} className="ml-1 c-text-2 hover:c-text-red2"><Ban size={14} /></button>
+                             <div className="flex items-center ml-1 border-l c-bd-2 pl-2 gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                               <button onClick={() => setModalDonar(n)} className="text-green-600 hover:text-green-800" title="Añadir fichas"><Gift size={14} /></button>
+                               <button onClick={() => toggleVeto(n)} className="c-text-2 hover:c-text-red2" title="Vetar/Desvetar"><Ban size={14} /></button>
+                               <button onClick={() => solicitarAccionProtegida('eliminar_apostante', n)} className="c-text-red2" title="Eliminar Apostante"><Trash2 size={14} /></button>
+                             </div>
                           )}
                         </span>
                       </div>
@@ -2298,9 +2513,9 @@ export default function CasaApuestasPingpong() {
             {!modoEspectador && (
               <Panel icon={Swords} titulo="Margen de la casa">
                 <div className="flex items-center justify-between">
-                  <button onClick={() => persistir({ ...estado, margen: Math.max(0, +(estado.margen - 0.01).toFixed(2)) })} className="w-9 h-9 rounded-lg c-bg-app border c-bd-1 c-text-1 font-bold active:scale-90 transition-transform">–</button>
+                  <button onClick={() => persistir({ ...estado, margen: Math.max(0, +(estado.margen - 0.01).toFixed(2)) })} className="w-9 h-9 rounded-lg c-bg-app border c-bd-1 c-text-1 font-bold active:scale-90 transition-transform shadow-sm">–</button>
                   <span className="font-mono text-lg font-bold c-text-orange">{(estado.margen * 100).toFixed(0)}%</span>
-                  <button onClick={() => persistir({ ...estado, margen: Math.min(0.3, +(estado.margen + 0.01).toFixed(2)) })} className="w-9 h-9 rounded-lg c-bg-app border c-bd-1 c-text-1 font-bold active:scale-90 transition-transform">+</button>
+                  <button onClick={() => persistir({ ...estado, margen: Math.min(0.3, +(estado.margen + 0.01).toFixed(2)) })} className="w-9 h-9 rounded-lg c-bg-app border c-bd-1 c-text-1 font-bold active:scale-90 transition-transform shadow-sm">+</button>
                 </div>
               </Panel>
             )}
@@ -2310,10 +2525,11 @@ export default function CasaApuestasPingpong() {
         {tab === "historial" && (
           <div className="space-y-3">
             {estado.historial.length > 0 && (
-              <button onClick={exportarHistorial} className="w-full rounded-lg border border-dashed c-bd-orange c-text-orange text-sm font-semibold py-2.5">
+              <button onClick={exportarHistorial} className="w-full rounded-lg border border-dashed c-bd-orange c-text-orange text-sm font-semibold py-2.5 bg-white">
                 ⬇️ Exportar historial a CSV
               </button>
             )}
+            
             {estado.historial.length === 0 ? (
               <Panel icon={History} titulo="Historial">
                 <p className="text-sm c-text-2">Aún no se ha cerrado ningún partido.</p>
@@ -2371,7 +2587,7 @@ export default function CasaApuestasPingpong() {
           style={{ animation: fabPop ? "fabPop .26s ease" : "none" }}
           className="fixed bottom-20 right-4 z-40 c-bg-orange c-text-dark-on-accent rounded-full pl-3 pr-4 py-3 c-shadow-fab flex items-center gap-2 font-bold text-sm"
         >
-          <Ticket size={18} /> {slip.length} · {totalSlipStake.toFixed(2)} fichas (Posible: {totalSlipPremio.toFixed(2)})
+          <Ticket size={18} /> {slip.length} · {totalSlipStake.toFixed(2)} fichas
         </button>
       )}
 
@@ -2391,14 +2607,14 @@ export default function CasaApuestasPingpong() {
 
       {slipOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50" onClick={() => setSlipOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl p-4 w-full max-w-md space-y-3 border-t c-bd-1 c-maxh-80vh overflow-y-auto c-anim-fadein-2">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl p-4 w-full max-w-md space-y-3 border-t c-bd-1 c-maxh-80vh overflow-y-auto c-anim-fadein-2 shadow-2xl">
             <div className="flex justify-between items-center">
               <div className="font-bold c-text-1 flex items-center gap-1.5"><Ticket size={16} className="c-text-orange" /> Cesta de apuestas</div>
               <button onClick={() => setSlipOpen(false)} className="c-text-2"><X size={18} /></button>
             </div>
             
             {slipError && (
-              <div className="text-xs bg-red-50 text-red-700 border border-red-200 rounded-lg p-2 font-medium">
+              <div className="text-xs bg-red-50 text-red-700 border border-red-200 rounded-lg p-2 font-medium shadow-sm">
                 {slipError}
               </div>
             )}
@@ -2408,13 +2624,13 @@ export default function CasaApuestasPingpong() {
             ) : (
               <div className="space-y-2">
                 {slip.length >= 2 && (
-                  <div className="flex rounded-lg overflow-hidden border c-bd-1 text-sm font-semibold">
+                  <div className="flex rounded-lg overflow-hidden border c-bd-1 text-sm font-semibold shadow-sm">
                     <button onClick={() => setModoSlip("simples")} className={`flex-1 py-1.5 ${modoSlip === "simples" ? "c-bg-orange c-text-dark-on-accent" : "c-bg-app c-text-2"}`}>Simples</button>
-                    <button onClick={() => setModoSlip("combinada")} className={`flex-1 py-1.5 ${modoSlip === "combinada" ? "c-bg-orange c-text-dark-on-accent" : "c-bg-app c-text-2"}`}>Combinada</button>
+                    <button onClick={() => setModoSlip("combinada")} className={`flex-1 py-1.5 ${modoSlip === "combinada" ? "c-bg-orange c-text-dark-on-accent" : "c-bg-app c-text-2"}`}>SGP (Combinada)</button>
                   </div>
                 )}
                 {slip.map((s) => (
-                  <div key={s.id} className="flex items-center gap-2 c-bg-app rounded-lg p-2 border c-bd-2">
+                  <div key={s.id} className="flex items-center gap-2 c-bg-app rounded-lg p-2 border c-bd-2 shadow-sm">
                     <div className="flex-1 min-w-0">
                       <div className="text-xs c-text-2 truncate">{s.mercado}</div>
                       <div className="text-sm font-bold c-text-1">{s.seleccion} <span className="c-text-orange">Cuota: {s.cuota.toFixed(2)}</span></div>
@@ -2423,32 +2639,32 @@ export default function CasaApuestasPingpong() {
                       )}
                     </div>
                     {modoSlip === "simples" || slip.length < 2 ? (
-                      <input inputMode="decimal" value={s.stake} onChange={(e) => actualizarStakeSlip(s.id, e.target.value)} className="w-20 rounded-lg border c-bd-1 c-bg-white p-1.5 text-sm text-center c-text-1 shadow-sm" placeholder="Fichas" />
+                      <input inputMode="decimal" value={s.stake} onChange={(e) => actualizarStakeSlip(s.id, e.target.value)} className="w-20 rounded-lg border c-bd-1 c-bg-white p-1.5 text-sm text-center c-text-1 shadow-inner" placeholder="Fichas" />
                     ) : null}
                     <button onClick={() => quitarDeSlip(s.id)} className="c-text-red2"><X size={16} /></button>
                   </div>
                 ))}
-                <input value={bettorSlip} onChange={(e) => setBettorSlip(e.target.value)} placeholder="¿Quién apuesta?" list="bettors-list" className="w-full rounded-lg border c-bd-1 c-bg-white p-2 text-sm c-text-1 shadow-sm" />
+                <input value={bettorSlip} onChange={(e) => setBettorSlip(e.target.value)} placeholder="¿Quién apuesta?" list="bettors-list" className="w-full rounded-lg border c-bd-1 c-bg-white p-2 text-sm c-text-1 shadow-inner" />
                 <datalist id="bettors-list">{Object.keys(estado.bettors).map((n) => <option key={n} value={n} />)}</datalist>
 
                 {modoSlip === "combinada" && slip.length >= 2 ? (
                   <>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm c-text-2">Fichas a jugar</span>
-                      <input inputMode="decimal" value={stakeCombinada} onChange={(e) => setStakeCombinada(e.target.value)} className="flex-1 rounded-lg border c-bd-1 c-bg-white p-1.5 text-sm text-center c-text-1 shadow-sm" />
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-sm c-text-2 font-bold">Fichas a jugar</span>
+                      <input inputMode="decimal" value={stakeCombinada} onChange={(e) => setStakeCombinada(e.target.value)} className="flex-1 rounded-lg border c-bd-1 c-bg-white p-1.5 text-sm text-center c-text-1 shadow-inner" />
+                    </div>
+                    <div className="flex justify-between text-sm c-text-3 px-1 mt-2 bg-gray-50 p-2 rounded-md border c-bd-2">
+                      <span className="font-semibold">Cuota conjunta inteligente</span>
+                      <span className="font-bold c-text-orange">{calcularCuotaSGP(slip, mercados, partido, estado.margen).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm c-text-3 px-1">
-                      <span>Cuota combinada ({slip.length} patas)</span>
-                      <span className="font-bold c-text-orange">{Math.max(1.01, slip.reduce((acc, s) => acc * s.cuota, 1)).toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm c-text-3 px-1">
-                      <span>Premio si aciertas todas</span>
-                      <span className="font-bold c-text-green">{(Math.max(1.01, slip.reduce((acc, s) => acc * s.cuota, 1)) * (Number(stakeCombinada.replace(',', '.')) || 0)).toFixed(2)} fichas</span>
+                      <span className="font-semibold">Premio si aciertas todas</span>
+                      <span className="font-bold c-text-green">{(calcularCuotaSGP(slip, mercados, partido, estado.margen) * (Number(stakeCombinada.replace(',', '.')) || 0)).toFixed(2)} fichas</span>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div className="flex justify-between text-sm c-text-3 px-1">
+                    <div className="flex justify-between text-sm c-text-3 px-1 mt-2">
                       <span>Total apostado</span><span className="font-bold c-text-1">{totalSlipStake.toFixed(2)} fichas</span>
                     </div>
                     <div className="flex justify-between text-sm c-text-3 px-1">
@@ -2457,7 +2673,7 @@ export default function CasaApuestasPingpong() {
                   </>
                 )}
 
-                <button onClick={confirmarSlip} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 active:scale-95 transition-transform">
+                <button onClick={confirmarSlip} className="w-full mt-2 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 active:scale-95 transition-transform shadow-sm">
                   {modoSlip === "combinada" && slip.length >= 2 ? "Confirmar combinada" : `Confirmar ${slip.length} apuesta${slip.length > 1 ? "s" : ""}`}
                 </button>
               </div>
@@ -2492,15 +2708,14 @@ export default function CasaApuestasPingpong() {
           nombre={perfilAbierto}
           perfil={construirPerfilJugador(estado.historial, perfilAbierto)}
           rating={ratingDe(perfilAbierto)}
+          statsAvanzadas={statsCampos.porJugador[perfilAbierto]}
           onCerrar={() => setPerfilAbierto(null)}
-          modoEspectador={modoEspectador}
-          onEliminar={(nombre) => solicitarAccionProtegida('eliminar_cuenta', nombre)}
         />
       )}
 
       {pidiendoPassword && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setPidiendoPassword(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 shadow-2xl">
             <div className="font-bold c-text-1">Volver al modo boss</div>
             <div className="text-sm c-text-2">Introduce la contraseña para poder gestionar partidos, jugadores y ajustes.</div>
             <input
@@ -2513,7 +2728,7 @@ export default function CasaApuestasPingpong() {
             {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
             <div className="flex gap-2 pt-1">
               <button onClick={() => setPidiendoPassword(false)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
-              <button onClick={confirmarPassword} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent py-2 text-sm font-bold">Entrar</button>
+              <button onClick={confirmarPassword} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent py-2 text-sm font-bold shadow-sm">Entrar</button>
             </div>
           </div>
         </div>
@@ -2522,25 +2737,50 @@ export default function CasaApuestasPingpong() {
       {/* MODAL DE ACCIONES PROTEGIDAS POR CONTRASEÑA */}
       {accionProtegida && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setAccionProtegida(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 border-t-4 border-t-red-600">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 border-t-4 border-t-red-600 shadow-2xl">
             <div className="font-bold c-text-1 text-lg flex items-center gap-2">
               <Lock size={18} className="c-text-red2" /> Acción Peligrosa
             </div>
             <div className="text-sm c-text-2 leading-snug">
               {accionProtegida.tipo === 'anular_apuesta' && "Vas a anular una apuesta en firme y devolver el dinero al jugador. Pon la clave de Boss."}
-              {accionProtegida.tipo === 'eliminar_cuenta' && `Vas a eliminar a ${accionProtegida.payload} del sistema (borrando su cuenta de apuestas y quitándolo del ranking). Pon la clave de Boss.`}
+              {accionProtegida.tipo === 'eliminar_apostante' && `Vas a eliminar a ${accionProtegida.payload} de la lista de apuestas y quitarle todas las fichas (sus estadísticas de jugador no se tocan). Pon la clave de Boss.`}
             </div>
             <input
               type="password" inputMode="numeric" value={pwdProtegida}
               onChange={(e) => setPwdProtegida(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") ejecutarAccionProtegida(); }}
               placeholder="Contraseña (123457)" autoFocus
-              className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1"
+              className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1 shadow-inner"
             />
             {errProtegida && <div className="text-xs c-text-red2 font-semibold">{errProtegida}</div>}
             <div className="flex gap-2 pt-1">
               <button onClick={() => setAccionProtegida(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Atrás</button>
-              <button onClick={ejecutarAccionProtegida} className="flex-1 rounded-lg bg-red-600 text-white py-2 text-sm font-bold">Autorizar</button>
+              <button onClick={ejecutarAccionProtegida} className="flex-1 rounded-lg bg-red-600 text-white py-2 text-sm font-bold shadow-sm">Autorizar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DONAR FICHAS */}
+      {modalDonar && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalDonar(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 border-t-4 border-t-green-500 shadow-2xl">
+            <div className="font-bold c-text-1 text-lg flex items-center gap-2">
+              <Gift size={18} className="text-green-600" /> Banco Central
+            </div>
+            <div className="text-sm c-text-2">
+              Añade (o quita con el signo -) fichas manualmente a la cuenta de <b className="c-text-1">{modalDonar}</b>.
+            </div>
+            <input
+              type="text" inputMode="decimal" value={cantidadDonar}
+              onChange={(e) => setCantidadDonar(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") procesarDonacion(); }}
+              placeholder="Ej: 100 o -50" autoFocus
+              className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-lg text-center font-bold c-text-1 shadow-inner"
+            />
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setModalDonar(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={procesarDonacion} className="flex-1 rounded-lg bg-green-500 text-white py-2 text-sm font-bold shadow-md">Confirmar</button>
             </div>
           </div>
         </div>
@@ -2548,14 +2788,14 @@ export default function CasaApuestasPingpong() {
 
       {csvVisible !== null && (
         <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-3" onClick={() => setCsvVisible(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-md space-y-2 border c-bd-1">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-md space-y-2 border c-bd-1 shadow-2xl">
             <div className="flex justify-between items-center">
               <div className="font-bold c-text-1">Historial exportado</div>
               <button onClick={() => setCsvVisible(null)} className="c-text-2"><X size={18} /></button>
             </div>
             <div className="text-xs c-text-2">Copia el texto de abajo y pégalo en Excel o Notas.</div>
-            <textarea readOnly value={csvVisible} onClick={(e) => e.target.select()} className="w-full h-40 rounded-lg border c-bd-1 c-bg-app p-2 text-[11px] c-text-1" style={{ fontFamily: "'Space Mono', monospace" }} />
-            <button onClick={copiarCSV} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
+            <textarea readOnly value={csvVisible} onClick={(e) => e.target.select()} className="w-full h-40 rounded-lg border c-bd-1 c-bg-app p-2 text-[11px] c-text-1 shadow-inner" style={{ fontFamily: "'Space Mono', monospace" }} />
+            <button onClick={copiarCSV} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 shadow-sm">
               {csvCopiado ? "✓ Copiado" : "📋 Copiar todo"}
             </button>
           </div>
@@ -2564,7 +2804,7 @@ export default function CasaApuestasPingpong() {
 
       {editarCuotaObjetivo && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditarCuotaObjetivo(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 shadow-2xl">
             <div className="flex justify-between items-start">
               <div>
                 <div className="text-[10px] uppercase font-bold c-text-2">Ajustar cuota manual</div>
@@ -2576,13 +2816,13 @@ export default function CasaApuestasPingpong() {
             <input
               inputMode="decimal" value={editarCuotaInput} onChange={(e) => setEditarCuotaInput(e.target.value)}
               placeholder={editarCuotaObjetivo.valorBase.toFixed(2)} autoFocus disabled={editarCuotaObjetivo.isLocked}
-              className={`w-full rounded-lg border c-bd-1 p-2 text-lg font-bold text-center c-text-1 ${editarCuotaObjetivo.isLocked ? "c-bg-app opacity-50" : "c-bg-white"}`}
+              className={`w-full rounded-lg border c-bd-1 p-2 text-lg font-bold text-center c-text-1 shadow-inner ${editarCuotaObjetivo.isLocked ? "c-bg-app opacity-50" : "c-bg-white"}`}
             />
             {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
             <div className="flex gap-2">
-              <button onClick={guardarCuotaEditada} disabled={editarCuotaObjetivo.isLocked} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm disabled:opacity-50">Guardar</button>
+              <button onClick={guardarCuotaEditada} disabled={editarCuotaObjetivo.isLocked} className="flex-1 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm disabled:opacity-50 shadow-sm">Guardar</button>
               {boostDe(partido, editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion) && !editarCuotaObjetivo.isLocked && (
-                <button onClick={quitarCuotaEditada} className="flex-1 rounded-lg border c-bd-1 c-text-2 font-bold py-2 text-sm">Restaurar</button>
+                <button onClick={quitarCuotaEditada} className="flex-1 rounded-lg border c-bd-1 c-text-2 font-bold py-2 text-sm shadow-sm">Restaurar</button>
               )}
             </div>
             {!editarCuotaObjetivo.isLocked ? (
@@ -2600,27 +2840,27 @@ export default function CasaApuestasPingpong() {
 
       {modalNuevoMercado && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalNuevoMercado(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1 shadow-2xl">
             <div className="flex justify-between items-center">
               <div className="font-bold c-text-1">Añadir mercado personalizado</div>
               <button onClick={() => setModalNuevoMercado(false)} className="c-text-2"><X size={18} /></button>
             </div>
             <div className="space-y-2">
               <div>
-                <label className="text-xs c-text-2">Nombre del mercado</label>
-                <input value={nombreMercadoCustom} onChange={(e) => setNombreMercadoCustom(e.target.value)} placeholder="Ej. Saques directos de Jorge" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+                <label className="text-xs c-text-2 font-semibold">Nombre del mercado</label>
+                <input value={nombreMercadoCustom} onChange={(e) => setNombreMercadoCustom(e.target.value)} placeholder="Ej. Saques directos de Jorge" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1 shadow-inner" />
               </div>
               <div>
-                <label className="text-xs c-text-2">Selección o opción</label>
-                <input value={seleccionMercadoCustom} onChange={(e) => setSeleccionMercadoCustom(e.target.value)} placeholder="Ej. Más de 3" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+                <label className="text-xs c-text-2 font-semibold">Selección o opción</label>
+                <input value={seleccionMercadoCustom} onChange={(e) => setSeleccionMercadoCustom(e.target.value)} placeholder="Ej. Más de 3" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1 shadow-inner" />
               </div>
               <div>
-                <label className="text-xs c-text-2">Cuota</label>
-                <input inputMode="decimal" value={cuotaMercadoCustom} onChange={(e) => setCuotaMercadoCustom(e.target.value)} placeholder="2.50" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+                <label className="text-xs c-text-2 font-semibold">Cuota</label>
+                <input inputMode="decimal" value={cuotaMercadoCustom} onChange={(e) => setCuotaMercadoCustom(e.target.value)} placeholder="2.50" className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1 shadow-inner" />
               </div>
             </div>
             {error && <div className="text-xs c-text-red2 font-semibold">{error}</div>}
-            <button onClick={crearMercadoCustom} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
+            <button onClick={crearMercadoCustom} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 shadow-sm">
               Publicar mercado en mesa
             </button>
           </div>
@@ -2629,7 +2869,7 @@ export default function CasaApuestasPingpong() {
 
       {resolviendoCustoms && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setResolviendoCustoms(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1 c-maxh-80vh overflow-y-auto">
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1 c-maxh-80vh overflow-y-auto shadow-2xl">
             <div className="flex justify-between items-center">
               <div className="font-bold c-text-1 text-lg">Resolución Manual</div>
               <button onClick={() => setResolviendoCustoms(null)} className="c-text-2"><X size={18} /></button>
@@ -2642,19 +2882,19 @@ export default function CasaApuestasPingpong() {
                   const idCustom = `${c.mercado}||${c.seleccion}`;
                   const acertado = resolviendoCustoms.respuestas[idCustom] || false;
                   return (
-                      <div key={idCustom} className="p-3 rounded-lg c-bg-app border c-bd-1 flex items-center justify-between gap-3">
+                      <div key={idCustom} className="p-3 rounded-lg c-bg-app border c-bd-1 flex items-center justify-between gap-3 shadow-sm">
                          <div className="text-sm font-semibold flex-1">
                             {c.mercado}: <span className="c-text-orange">{c.seleccion}</span>
                          </div>
-                         <div className="flex border c-bd-2 rounded-lg overflow-hidden shrink-0 font-bold text-xs">
-                            <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: true } })} className={`px-3 py-1.5 ${acertado ? "c-bg-green c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>SÍ</button>
-                            <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: false } })} className={`px-3 py-1.5 ${!acertado ? "c-bg-red c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>NO</button>
+                         <div className="flex border c-bd-2 rounded-lg overflow-hidden shrink-0 font-bold text-xs shadow-inner">
+                            <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: true } })} className={`px-3 py-1.5 transition-colors ${acertado ? "c-bg-green c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>SÍ</button>
+                            <button onClick={() => setResolviendoCustoms({ respuestas: { ...resolviendoCustoms.respuestas, [idCustom]: false } })} className={`px-3 py-1.5 transition-colors ${!acertado ? "c-bg-red c-text-white" : "bg-white c-text-2 hover:bg-black/5"}`}>NO</button>
                          </div>
                       </div>
                   );
                })}
             </div>
-            <button onClick={() => procesarCierrePartido(resolviendoCustoms.respuestas)} className="w-full mt-3 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5">
+            <button onClick={() => procesarCierrePartido(resolviendoCustoms.respuestas)} className="w-full mt-3 rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 shadow-sm">
               Confirmar y Liquidar Todo
             </button>
           </div>
