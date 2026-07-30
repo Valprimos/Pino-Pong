@@ -1257,18 +1257,16 @@ export default function CasaApuestasPingpong() {
   const [cantidadDonar, setCantidadDonar] = useState("");
 
   const prevSlipLen = useRef(0);
-  const ultimoEnviado = useRef(null);
+  const ultimoSincronizado = useRef(null);
 
   useEffect(() => {
     const unsubscribe = suscribirEstado((remoto) => {
-      const remotoStr = remoto ? JSON.stringify(remoto) : null;
-      // Si lo que llega es el eco de nuestro propio guardado, lo ignoramos
-      // para no re-disparar el efecto de guardado en bucle.
-      if (remotoStr && remotoStr === ultimoEnviado.current) {
-        setCargando(false);
-        return;
-      }
-      setEstado(remoto ? { ...ESTADO_DEFECTO, ...remoto } : ESTADO_DEFECTO);
+      const estadoMerged = remoto ? { ...ESTADO_DEFECTO, ...remoto } : ESTADO_DEFECTO;
+      // Siempre aplicamos lo que llega de Firebase (es la fuente de verdad).
+      // Guardamos su "huella" para que el efecto de guardado de abajo no
+      // vuelva a reenviarlo si no ha cambiado nada realmente.
+      ultimoSincronizado.current = JSON.stringify(estadoMerged);
+      setEstado(estadoMerged);
       setCargando(false);
     });
     return () => unsubscribe();
@@ -1286,7 +1284,7 @@ export default function CasaApuestasPingpong() {
       esGM: partidoActual.esGM 
     };
 
-    const pA_punto = calcularProbabilidadPuntoPura(estado.historial, partidoActual.a, partidoActual.b, ctxPartido);
+    const pA_punto = calcularProbabilidadPuntoPura(estado.historial || [], partidoActual.a, partidoActual.b, ctxPartido);
     const mercadosTemp = calcularMercadosDesdeProbabilidad(pA_punto, estado.margen, partidoActual.a, partidoActual.b);
     
     const stakeA = sumaStakeGanador(partidoActual.apuestas, partidoActual.a);
@@ -1336,7 +1334,9 @@ export default function CasaApuestasPingpong() {
 
   useEffect(() => {
     if (estado && !cargando) {
-      ultimoEnviado.current = JSON.stringify(estado);
+      const str = JSON.stringify(estado);
+      if (str === ultimoSincronizado.current) return; // ya está igual en Firebase, no reenviar
+      ultimoSincronizado.current = str;
       guardarEstado(estado);
     }
   }, [estado, cargando]);
@@ -1825,7 +1825,7 @@ export default function CasaApuestasPingpong() {
 
   if (partido) {
     ctxPartido = { ladoA: partido.ladoA, ladoB: partido.ladoB, solLado: partido.solLado, viento: partido.viento, esGM: partido.esGM };
-    pA_punto = calcularProbabilidadPuntoPura(estado.historial, partido.a, partido.b, ctxPartido);
+    pA_punto = calcularProbabilidadPuntoPura(estado.historial || [], partido.a, partido.b, ctxPartido);
     mercados = calcularMercadosDesdeProbabilidad(pA_punto, estado.margen, partido.a, partido.b);
   }
 
