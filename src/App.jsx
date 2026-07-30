@@ -3,9 +3,16 @@ import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCc
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
-const PENALIZACION_SOL = 60;
-const FACTOR_VIENTO = 0.7;
 const SD_PUNTOS = 4;
+
+// MULTIPLICADOR POR MARGEN DE VICTORIA (MOV)
+// Suaviza la diferencia: un 21-19 no castiga igual que un 21-5.
+function calcularMovMulti(pa, pb) {
+  const diff = Math.abs(pa - pb);
+  if (diff === 0) return 1;
+  // Usamos logaritmo para que la curva sea suave. diff 2 = ~1.1, diff 10 = ~2.5, diff 21 = ~3.1
+  return Math.log(diff + Math.E - 1);
+}
 
 function expectedScore(rA, rB) {
   return 1 / (1 + Math.pow(10, (rB - rA) / 400));
@@ -286,13 +293,20 @@ function rangoHandicapSensato(pA, pB, perdedorEsperadoA, perdedorEsperadoB, marg
   return { min: 3, max: Math.max(6, max) };
 }
 
-function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, solLado, viento) {
+// LOGICA DE ELO ACTUALIZADA: Aplica multiplicador MOV para premiar palizas
+function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, pa, pb) {
   const avgA = ratingsA.reduce((s, r) => s + r, 0) / ratingsA.length;
   const avgB = ratingsB.reduce((s, r) => s + r, 0) / ratingsB.length;
   const pA = expectedScore(avgA, avgB);
   const pB = 1 - pA;
   const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
-  return { deltaA: K_FACTOR * (sA - pA), deltaB: K_FACTOR * (sB - pB) };
+  
+  const movAjuste = calcularMovMulti(pa, pb);
+
+  return { 
+    deltaA: K_FACTOR * movAjuste * (sA - pA), 
+    deltaB: K_FACTOR * movAjuste * (sB - pB) 
+  };
 }
 
 function evaluarPata(mercado, seleccion, ctx, customResults = {}) {
@@ -363,6 +377,7 @@ function sonContradictorias(a, b, partido) {
   return vecesGananAmbas === 0;
 }
 
+// NUEVA LÓGICA DE SGP (Combinadas) - Equilibrio matemático vs diversión
 function calcularCuotaSGP(slip, mercados, partido, margen) {
   if (slip.length === 0) return 1;
   if (!mercados || !partido) return slip.reduce((a, b) => a * (b.cuota || 1), 1);
@@ -381,7 +396,18 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
       });
       probConjunta = Math.max(0.000001, probConjunta); 
       probConjunta = Math.min(0.98, probConjunta);
-      cuotaStd = cuota(probConjunta, margen);
+      
+      const cuotaTeorica = cuota(probConjunta, margen);
+      const productoIrreal = stdLegs.reduce((acc, leg) => acc * leg.cuota, 1);
+      const maximaIndividual = stdLegs.reduce((max, leg) => Math.max(max, leg.cuota), 1);
+
+      // El bonus: Damos un extra visual para que compense jugársela en SGP.
+      // Pero sin pasarnos del producto ingenuo (que arruina a la casa).
+      const cuotaAjustada = maximaIndividual + (cuotaTeorica - maximaIndividual) * 1.15;
+      
+      // La cuota SGP final no puede ser peor que apostar a la pata más difícil,
+      // y no puede ser mejor que multiplicar todas las cuotas sin correlación.
+      cuotaStd = Math.max(maximaIndividual, Math.min(productoIrreal, cuotaAjustada));
   }
   
   const cuotaCust = customLegs.reduce((a, b) => a * b.cuota, 1);
@@ -460,10 +486,12 @@ function construirRegistrosPorJugador(historial) {
     const ratingB = p.ratingsAntes?.[b] ?? RATING_INICIAL;
     const pEloA = expectedScore(ratingA, ratingB);
     const ganoA = p.pa > p.pb;
+    const movMulti = calcularMovMulti(p.pa, p.pb);
+
     if (!registros[a]) registros[a] = [];
     if (!registros[b]) registros[b] = [];
-    registros[a].push({ lado: p.ladoA, gano: ganoA, pElo: pEloA, solLeMolesta: p.solLado === p.ladoA, viento: !!p.viento });
-    registros[b].push({ lado: p.ladoB, gano: !ganoA, pElo: 1 - pEloA, solLeMolesta: p.solLado === p.ladoB, viento: !!p.viento });
+    registros[a].push({ lado: p.ladoA, gano: ganoA, pElo: pEloA, mov: movMulti, solLeMolesta: p.solLado === p.ladoA, viento: !!p.viento });
+    registros[b].push({ lado: p.ladoB, gano: !ganoA, pElo: 1 - pEloA, mov: movMulti, solLeMolesta: p.solLado === p.ladoB, viento: !!p.viento });
   });
   return registros;
 }
@@ -475,7 +503,8 @@ function efectoContextual(registrosJugador, filtro, pseudoN) {
   const n = subset.length;
   if (n === 0) return { efecto: 0, n: 0, victorias: 0 };
   const victorias = subset.filter((r) => r.gano).length;
-  const mediaResiduo = subset.reduce((s, r) => s + ((r.gano ? 1 : 0) - r.pElo), 0) / n;
+  // Multiplicamos el impacto por el margen (mov)
+  const mediaResiduo = subset.reduce((s, r) => s + (((r.gano ? 1 : 0) - r.pElo) * r.mov), 0) / n;
   const atenuado = mediaResiduo * (n / (n + pseudoN));
   const acotado = Math.max(-TOPE_EFECTO_INDIVIDUAL, Math.min(TOPE_EFECTO_INDIVIDUAL, atenuado));
   return { efecto: acotado, n, victorias };
@@ -510,6 +539,7 @@ function probabilidadYDetalle(historialPrevio, nombreA, nombreB, ratingA, rating
   return { pA, pB: 1 - pA, detalleA: efA.detalle, detalleB: efB.detalle, h2h: efH2H };
 }
 
+// REGISTROS H2H ACTUALIZADOS PARA GUARDAR EL MOV
 function construirRegistrosH2H(historial) {
   const registros = {};
   historial.forEach((p) => {
@@ -519,12 +549,15 @@ function construirRegistrosH2H(historial) {
     const ratingB = p.ratingsAntes?.[b] ?? RATING_INICIAL;
     const pEloA = expectedScore(ratingA, ratingB);
     const ganoA = p.pa > p.pb;
+    const movMulti = calcularMovMulti(p.pa, p.pb);
+
     if (!registros[a]) registros[a] = {};
     if (!registros[a][b]) registros[a][b] = [];
-    registros[a][b].push({ gano: ganoA, pElo: pEloA, partido: p });
+    registros[a][b].push({ gano: ganoA, pElo: pEloA, mov: movMulti, partido: p });
+    
     if (!registros[b]) registros[b] = {};
     if (!registros[b][a]) registros[b][a] = [];
-    registros[b][a].push({ gano: !ganoA, pElo: 1 - pEloA, partido: p });
+    registros[b][a].push({ gano: !ganoA, pElo: 1 - pEloA, mov: movMulti, partido: p });
   });
   return registros;
 }
@@ -535,7 +568,10 @@ function efectoH2H(registrosH2H, nombreA, nombreB) {
   if (!regs || regs.length === 0) return { efecto: 0, n: 0, victorias: 0 };
   const n = regs.length;
   const victorias = regs.filter((r) => r.gano).length;
-  const mediaResiduo = regs.reduce((s, r) => s + ((r.gano ? 1 : 0) - r.pElo), 0) / n;
+  
+  // Ahora el efecto H2H depende de la dureza de las victorias/derrotas (r.mov)
+  const mediaResiduo = regs.reduce((s, r) => s + (((r.gano ? 1 : 0) - r.pElo) * r.mov), 0) / n;
+  
   const atenuado = mediaResiduo * (n / (n + 2.5));
   const acotado = Math.max(-TOPE_H2H, Math.min(TOPE_H2H, atenuado));
   return { efecto: acotado, n, victorias };
@@ -723,17 +759,21 @@ function construirEstadoDesdeHistorialReal() {
 
     const ganoA = m.pa > m.pb;
     let deltaA, deltaB;
+    
+    // APLICAMOS MOV EN LA CARGA DEL HISTORIAL
+    const movMulti = calcularMovMulti(m.pa, m.pb);
+
     if (equipoA.length === 1 && equipoB.length === 1) {
       const pEloBase = expectedScore(jugadores[equipoA[0]], jugadores[equipoB[0]]);
       const pA = pEloBase; 
       const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
-      deltaA = K_FACTOR * (sA - pA);
-      deltaB = K_FACTOR * (sB - (1 - pA));
+      deltaA = K_FACTOR * movMulti * (sA - pA);
+      deltaB = K_FACTOR * movMulti * (sB - (1 - pA));
     } else {
       const r = actualizarEloEquipo(
         equipoA.map((n) => jugadores[n]), m.ladoA ?? null,
         equipoB.map((n) => jugadores[n]), m.ladoB ?? null,
-        ganoA, m.solLado ?? null, !!m.viento
+        ganoA, m.pa, m.pb // Ahora le pasamos puntos
       );
       deltaA = r.deltaA; deltaB = r.deltaB;
     }
@@ -1687,12 +1727,13 @@ export default function CasaApuestasPingpong() {
     const ganoA = pa > pb;
     const ganador = ganoA ? partido.a : partido.b;
     const perdedor = ganoA ? partido.b : partido.a;
-    const { pA: pAjustadaA } = probabilidadYDetalle(estado.historial, partido.a, partido.b, ratingA0, ratingB0, partido.ladoA, partido.ladoB, partido.solLado, partido.viento);
-    const pBajustadaB = 1 - pAjustadaA;
-    const sA_ = ganoA ? 1 : 0, sB_ = ganoA ? 0 : 1;
-    const deltaA = K_FACTOR * (sA_ - pAjustadaA), deltaB = K_FACTOR * (sB_ - pBajustadaB);
-    const nuevoA = ratingA0 + deltaA, nuevoB = ratingB0 + deltaB;
+    
     const { gm, pendiente } = actualizarTitulo(estado.gm, estado.pendiente, partido.esGM, ganador);
+
+    // ELO con MOV integrado
+    const resElo = actualizarEloEquipo([ratingA0], partido.ladoA, [ratingB0], partido.ladoB, ganoA, pa, pb);
+    const nuevoA = ratingA0 + resElo.deltaA;
+    const nuevoB = ratingB0 + resElo.deltaB;
 
     const ctx = { ganador, pa, pb, nombreA: partido.a, nombreB: partido.b };
     const apuestasResueltas = partido.apuestas.map((ap) => {
