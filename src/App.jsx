@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2, Gift, Target, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronUp } from "lucide-react";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref as dbRef, onValue, set as dbSet } from "firebase/database";
+import { firebaseConfig } from "./firebaseConfig";
+
+// --- SINCRONIZACIÓN EN LA NUBE (Firebase) ---
+// Esto hace que todos los amigos vean los mismos datos en tiempo real,
+// sin importar desde qué móvil o navegador entren.
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getDatabase(firebaseApp);
+const ESTADO_DB_REF = dbRef(db, "casaPingpongEstado");
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
@@ -623,32 +633,130 @@ function descargarCSV(contenido, nombreArchivo) {
   URL.revokeObjectURL(url);
 }
 
-const STORAGE_KEY = "casa-pingpong-estado-v1";
-
 const ESTADO_DEFECTO = {
   jugadores: {}, gm: null, pendiente: null, margen: 0.08,
   bettors: {}, partidoAbierto: null, historial: [], vetados: [],
 };
 
-async function cargarEstado() {
-  try {
-    const res = localStorage.getItem(STORAGE_KEY);
-    if (res) return JSON.parse(res);
-  } catch (e) {}
-  return null;
+// Se suscribe a los cambios del estado compartido en Firebase.
+// `callback` se llama con el estado cada vez que cambia (el propio o el de otro amigo).
+function suscribirEstado(callback) {
+  return onValue(
+    ESTADO_DB_REF,
+    (snapshot) => callback(snapshot.exists() ? snapshot.val() : null),
+    (error) => { console.error("Error leyendo estado de Firebase", error); callback(null); }
+  );
 }
+
 async function guardarEstado(estado) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(estado)); }
-  catch (e) { console.error("Error guardando estado", e); }
+  try { await dbSet(ESTADO_DB_REF, estado); }
+  catch (e) { console.error("Error guardando estado en Firebase", e); }
 }
 
 const HISTORIAL_REAL = [
   { teamA: ["Jorge"], teamB: ["Javier"], pa: 16, pb: 21, esGM: true },
-  { teamA: ["Nicolás"], teamB: ["Javier"], pa: 5, pb: 21, esGM: false },
-  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 19, esGM: false },
-  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 13, esGM: false },
-  { teamA: ["Nicolás"], teamB: ["Carlos (tío)"], pa: 21, pb: 15, esGM: false },
+  { teamA: ["Nicolás"], teamB: ["Javier"], pa: 5, pb: 21 },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 19 },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 13 },
+  { teamA: ["Nicolás"], teamB: ["Carlos (tío)"], pa: 21, pb: 15 },
   { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 12, esGM: true },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 15, esGM: true, ladoA: "Canasta", ladoB: "Columpios", solLado: "Canasta", hora: "12:00" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 19, esGM: true, ladoA: "Canasta", ladoB: "Columpios", solLado: "Canasta", hora: "12:10" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 18, esGM: true, ladoA: "Columpios", ladoB: "Canasta", solLado: "Canasta", hora: "12:20" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 18, esGM: true, ladoA: "Columpios", ladoB: "Canasta", solLado: "Canasta", hora: "12:30" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 19, pb: 21, esGM: true, ladoA: "Canasta", ladoB: "Columpios", solLado: "Canasta", hora: "12:40" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 15, pb: 21, esGM: true, ladoA: "Canasta", ladoB: "Columpios", solLado: "Canasta", hora: "12:50" },
+  { teamA: ["Javier"], teamB: ["Nicolás"], pa: 22, pb: 20, ladoA: "Columpios", ladoB: "Canasta", hora: "19:20" },
+  { teamA: ["Javier"], teamB: ["Nicolás"], pa: 21, pb: 17, ladoA: "Columpios", ladoB: "Canasta", hora: "19:30" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 9, ladoA: "Columpios", ladoB: "Canasta", hora: "19:40" },
+  { teamA: ["Javier"], teamB: ["Juan"], pa: 21, pb: 12, ladoA: "Columpios", ladoB: "Canasta", hora: "19:50" },
+  { teamA: ["Juan y Javier"], teamB: ["Álvaro y Nicolás"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:00" },
+  { teamA: ["Juan y Javier"], teamB: ["Álvaro y Nicolás"], pa: 18, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:10" },
+  { teamA: ["Daniel y Javier"], teamB: ["Álvaro y Nicolás"], pa: 17, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:20" },
+  { teamA: ["Alberto"], teamB: ["Álvaro"], pa: 19, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:00" },
+  { teamA: ["Pedro"], teamB: ["Álvaro"], pa: 18, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:10" },
+  { teamA: ["Juan"], teamB: ["Álvaro"], pa: 15, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:20" },
+  { teamA: ["Nicolás"], teamB: ["Alberto"], pa: 19, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "14:40" },
+  { teamA: ["Juan"], teamB: ["Alberto"], pa: 21, pb: 13, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "14:50" },
+  { teamA: ["Pedro"], teamB: ["Alberto"], pa: 21, pb: 18, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "15:00" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 16, pb: 21, esGM: true, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "18:50" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 23, pb: 21, esGM: true, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", viento: true, hora: "19:00" },
+  { teamA: ["Javier"], teamB: ["Nicolás"], pa: 25, pb: 23, esGM: true, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "19:10" },
+  { teamA: ["Javier"], teamB: ["Nicolás"], pa: 22, pb: 20, esGM: true, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "19:20" },
+  { teamA: ["Javier"], teamB: ["Nicolás"], pa: 21, pb: 12, esGM: true, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "19:20" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 16, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "18:30" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "18:40" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 16, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "18:50" },
+  { teamA: ["Javier"], teamB: ["Pedro"], pa: 9, pb: 1, ladoA: "Columpios", ladoB: "Canasta", hora: "19:00" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 17, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "19:00" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 18, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "19:10" },
+  { teamA: ["Pedro"], teamB: ["Jorge"], pa: 14, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "19:20" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 15, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "19:30" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 15, ladoA: "Columpios", ladoB: "Canasta", hora: "19:40" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 18, ladoA: "Columpios", ladoB: "Canasta", hora: "19:50" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 22, pb: 20, ladoA: "Columpios", ladoB: "Canasta", hora: "20:00" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 18, ladoA: "Columpios", ladoB: "Canasta", hora: "20:10" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 22, pb: 20, ladoA: "Canasta", ladoB: "Columpios", solLado: "Canasta", hora: "12:20" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 19, ladoA: "Canasta", ladoB: "Columpios", hora: "12:30" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 14, ladoA: "Canasta", ladoB: "Columpios", hora: "12:40" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 23, pb: 21, ladoA: "Canasta", ladoB: "Columpios", hora: "12:50" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 19, pb: 21, ladoA: "Canasta", ladoB: "Columpios", hora: "13:00" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 18, ladoA: "Canasta", ladoB: "Columpios", hora: "13:10" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 19, esGM: true, ladoA: "Columpios", ladoB: "Canasta", hora: "13:20" },
+  { teamA: ["Nicolás"], teamB: ["Pedro"], pa: 22, pb: 20, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", viento: true, hora: "18:30" },
+  { teamA: ["Álvaro"], teamB: ["Nicolás"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", viento: true },
+  { teamA: ["Álvaro"], teamB: ["Javier"], pa: 14, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 13, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", viento: true },
+  { teamA: ["Pedro"], teamB: ["Jorge"], pa: 13, pb: 21, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 11, pb: 21, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 21, pb: 16, esGM: true, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios" },
+  { teamA: ["Javier"], teamB: ["Pedro"], pa: 9, pb: 1, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 15, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "19:40" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 14, ladoA: "Canasta", ladoB: "Columpios", hora: "19:50" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 18, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "19:57" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 11, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "19:57" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 18, ladoA: "Canasta", ladoB: "Columpios", hora: "19:57" },
+  { teamA: ["Juan"], teamB: ["Álvaro"], pa: 14, pb: 21, ladoA: "Canasta", ladoB: "Columpios", hora: "20:49" },
+  { teamA: ["Juan"], teamB: ["Álvaro"], pa: 16, pb: 21, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "20:49" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", hora: "03:55" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 21, pb: 14, ladoA: "Columpios", ladoB: "Canasta", hora: "12:41" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 15, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "12:50" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 8, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "12:55" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 16, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "13:01" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 9, pb: 1, ladoA: "Columpios", ladoB: "Canasta", hora: "13:03" },
+  { teamA: ["Nicolás"], teamB: ["Pedro"], pa: 21, pb: 18, ladoA: "Canasta", ladoB: "Columpios", hora: "18:36" },
+  { teamA: ["Nicolás"], teamB: ["Álvaro"], pa: 14, pb: 21, ladoA: "Canasta", ladoB: "Columpios", hora: "18:48" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 10, ladoA: "Canasta", ladoB: "Columpios", hora: "18:54" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 13, ladoA: "Columpios", ladoB: "Canasta", hora: "18:59" },
+  { teamA: ["Jorge"], teamB: ["Pedro"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", hora: "19:13" },
+  { teamA: ["Álvaro"], teamB: ["Javier"], pa: 21, pb: 15, ladoA: "Columpios", ladoB: "Canasta", hora: "12:35" },
+  { teamA: ["Álvaro"], teamB: ["Javier"], pa: 13, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "12:44" },
+  { teamA: ["Álvaro"], teamB: ["Javier"], pa: 12, pb: 21, ladoA: "Columpios", ladoB: "Canasta", hora: "12:50" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 19, esGM: true, ladoA: "Columpios", ladoB: "Canasta", hora: "00:00" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 8, ladoA: "Columpios", ladoB: "Canasta", hora: "13:00" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 19, pb: 21, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", hora: "19:18" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 23, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "19:18" },
+  { teamA: ["Álvaro"], teamB: ["Juan"], pa: 9, pb: 1, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", hora: "19:36" },
+  { teamA: ["Pedro"], teamB: ["Álvaro"], pa: 21, pb: 17, ladoA: "Columpios", ladoB: "Canasta", hora: "19:37" },
+  { teamA: ["Javier"], teamB: ["Pedro"], pa: 21, pb: 6, ladoA: "Canasta", ladoB: "Columpios", hora: "19:41" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 16, esGM: true, ladoA: "Columpios", ladoB: "Canasta", hora: "19:41" },
+  { teamA: ["Jorge"], teamB: ["Juan"], pa: 7, pb: 0, ladoA: "Columpios", ladoB: "Canasta", hora: "19:58" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 9, ladoA: "Columpios", ladoB: "Canasta", hora: "20:03" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 19, pb: 21, ladoA: "Canasta", ladoB: "Columpios", hora: "20:05" },
+  { teamA: ["Jorge"], teamB: ["Juan"], pa: 21, pb: 9, ladoA: "Columpios", ladoB: "Canasta", hora: "20:12" },
+  { teamA: ["Jorge"], teamB: ["Álvaro"], pa: 21, pb: 15, ladoA: "Columpios", ladoB: "Canasta", hora: "20:21" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 8, ladoA: "Columpios", ladoB: "Canasta", hora: "20:22" },
+  { teamA: ["David"], teamB: ["Jorge"], pa: 1, pb: 9, ladoA: "Canasta", ladoB: "Columpios", hora: "20:28" },
+  { teamA: ["Juan"], teamB: ["Jorge"], pa: 17, pb: 21, ladoA: "Canasta", ladoB: "Columpios", hora: "20:36" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 21, pb: 23, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", hora: "20:36" },
+  { teamA: ["Javier"], teamB: ["Jorge"], pa: 15, pb: 21, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", hora: "20:36" },
+  { teamA: ["Jorge"], teamB: ["David"], pa: 9, pb: 1, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "20:52" },
+  { teamA: ["Jorge"], teamB: ["Juan"], pa: 7, pb: 0, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "20:52" },
+  { teamA: ["Álvaro"], teamB: ["Jorge"], pa: 21, pb: 16, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", hora: "21:00" },
+  { teamA: ["Javier"], teamB: ["Álvaro"], pa: 25, pb: 23, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "21:00" },
+  { teamA: ["Javier"], teamB: ["David"], pa: 11, pb: 2, ladoA: "Columpios", ladoB: "Canasta", solLado: "Columpios", hora: "21:00" },
+  { teamA: ["Juan"], teamB: ["Javier"], pa: 2, pb: 11, ladoA: "Canasta", ladoB: "Columpios", solLado: "Columpios", hora: "21:10" },
+  { teamA: ["Jorge"], teamB: ["Javier"], pa: 21, pb: 23, esGM: true, ladoA: "Canasta", ladoB: "Columpios", hora: "21:15" },
 ];
 
 function construirEstadoDesdeHistorialReal() {
@@ -1149,13 +1257,21 @@ export default function CasaApuestasPingpong() {
   const [cantidadDonar, setCantidadDonar] = useState("");
 
   const prevSlipLen = useRef(0);
+  const ultimoEnviado = useRef(null);
 
   useEffect(() => {
-    (async () => {
-      const cargado = await cargarEstado();
-      setEstado(cargado || ESTADO_DEFECTO);
+    const unsubscribe = suscribirEstado((remoto) => {
+      const remotoStr = remoto ? JSON.stringify(remoto) : null;
+      // Si lo que llega es el eco de nuestro propio guardado, lo ignoramos
+      // para no re-disparar el efecto de guardado en bucle.
+      if (remotoStr && remotoStr === ultimoEnviado.current) {
+        setCargando(false);
+        return;
+      }
+      setEstado(remoto ? { ...ESTADO_DEFECTO, ...remoto } : ESTADO_DEFECTO);
       setCargando(false);
-    })();
+    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -1220,6 +1336,7 @@ export default function CasaApuestasPingpong() {
 
   useEffect(() => {
     if (estado && !cargando) {
+      ultimoEnviado.current = JSON.stringify(estado);
       guardarEstado(estado);
     }
   }, [estado, cargando]);
