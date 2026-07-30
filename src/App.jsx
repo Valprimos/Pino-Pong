@@ -5,12 +5,9 @@ const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
 const SD_PUNTOS = 4;
 
-// MULTIPLICADOR POR MARGEN DE VICTORIA (MOV)
-// Suaviza la diferencia: un 21-19 no castiga igual que un 21-5.
 function calcularMovMulti(pa, pb) {
   const diff = Math.abs(pa - pb);
   if (diff === 0) return 1;
-  // Usamos logaritmo para que la curva sea suave. diff 2 = ~1.1, diff 10 = ~2.5, diff 21 = ~3.1
   return Math.log(diff + Math.E - 1);
 }
 
@@ -100,10 +97,13 @@ function getEmpiricalRates(historial, a, b) {
   };
 }
 
+// CAP DE CUOTAS LIMITADO A LA REALIDAD
 function cuota(p, margen) {
-  const pSegura = Math.max(0.000001, p);
+  // Aseguramos una probabilidad mínima del 0.4% para evitar cuotas infinitas (techo realista de 250)
+  const pSegura = Math.max(0.004, p); 
   const conMargen = (1 / pSegura) / (1 + margen);
-  return Number(Math.max(1.01, conMargen).toFixed(2));
+  // Suelo de 1.05, Techo de 250.00
+  return Number(Math.max(1.05, Math.min(250.00, conMargen)).toFixed(2));
 }
 
 function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombreB) {
@@ -140,7 +140,16 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
       probSumaCheck += t.p;
   });
 
-  terminales.forEach(t => { t.p = t.p / probSumaCheck; });
+  // SUAVIZADO LAPLACIANO PARA PUNTOS EXACTOS
+  // Inyectamos una probabilidad base a TODOS los terminales válidos para que ninguno sea "imposible"
+  const BASELINE_PROB = 0.005; 
+  let nuevaSumaSuavizada = 0;
+  terminales.forEach(t => { 
+      t.p = (t.p / probSumaCheck) * 0.85 + BASELINE_PROB; // 85% modelo + ruido base
+      nuevaSumaSuavizada += t.p; 
+  });
+  
+  terminales.forEach(t => { t.p = t.p / nuevaSumaSuavizada; }); // Renormalizamos
 
   let probParciales = 0, probAjustado = 0, probNormal = 0;
   terminales.forEach(t => {
@@ -223,7 +232,7 @@ function claveBoost(mercado, seleccion) {
 function boostDe(partido, mercado, seleccion) {
   const v = partido?.boosts?.[claveBoost(mercado, seleccion)];
   if (v === "LOCKED") return "LOCKED";
-  return (typeof v === "number" && v >= 1.01) ? v : null;
+  return (typeof v === "number" && v >= 1.05) ? v : null;
 }
 
 function cuotaHandicap(pA, pB, perdedorEsperadoSiPierdeB, perdedorEsperadoSiPierdeA, margen, k) {
@@ -252,7 +261,7 @@ function cuotaPuntosDefecto(pWin, perdedorEsperado, esperado, margen) {
 }
 
 function ladoConSentido(cuotaMas, cuotaMenos) {
-  const CASI_SEGURO = 1.02;
+  const CASI_SEGURO = 1.10;
   const masEsSeguro = cuotaMas <= CASI_SEGURO;
   const menosEsSeguro = cuotaMenos <= CASI_SEGURO;
   if (masEsSeguro && menosEsSeguro) return { mostrarMas: true, mostrarMenos: true };
@@ -293,7 +302,6 @@ function rangoHandicapSensato(pA, pB, perdedorEsperadoA, perdedorEsperadoB, marg
   return { min: 3, max: Math.max(6, max) };
 }
 
-// LOGICA DE ELO ACTUALIZADA: Aplica multiplicador MOV para premiar palizas
 function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, pa, pb) {
   const avgA = ratingsA.reduce((s, r) => s + r, 0) / ratingsA.length;
   const avgB = ratingsB.reduce((s, r) => s + r, 0) / ratingsB.length;
@@ -377,15 +385,15 @@ function sonContradictorias(a, b, partido) {
   return vecesGananAmbas === 0;
 }
 
-// NUEVA LÓGICA DE SGP (Combinadas) - Equilibrio matemático vs diversión
+// LOGICA DE SGP REESCRITA Y PROTEGIDA
 function calcularCuotaSGP(slip, mercados, partido, margen) {
-  if (slip.length === 0) return 1;
+  if (slip.length === 0) return 1.05;
   if (!mercados || !partido) return slip.reduce((a, b) => a * (b.cuota || 1), 1);
   
   const customLegs = slip.filter(s => isCustom(s.mercado));
   const stdLegs = slip.filter(s => !isCustom(s.mercado));
   
-  let cuotaStd = 1;
+  let cuotaStd = 1.05;
   if (stdLegs.length > 0) {
       let probConjunta = 0;
       mercados.terminales.forEach(t => {
@@ -394,24 +402,19 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
               probConjunta += t.p;
           }
       });
-      probConjunta = Math.max(0.000001, probConjunta); 
-      probConjunta = Math.min(0.98, probConjunta);
       
       const cuotaTeorica = cuota(probConjunta, margen);
       const productoIrreal = stdLegs.reduce((acc, leg) => acc * leg.cuota, 1);
       const maximaIndividual = stdLegs.reduce((max, leg) => Math.max(max, leg.cuota), 1);
 
-      // El bonus: Damos un extra visual para que compense jugársela en SGP.
-      // Pero sin pasarnos del producto ingenuo (que arruina a la casa).
-      const cuotaAjustada = maximaIndividual + (cuotaTeorica - maximaIndividual) * 1.15;
-      
-      // La cuota SGP final no puede ser peor que apostar a la pata más difícil,
-      // y no puede ser mejor que multiplicar todas las cuotas sin correlación.
-      cuotaStd = Math.max(maximaIndividual, Math.min(productoIrreal, cuotaAjustada));
+      // BLINDAJE 1: La cuota SGP jamás puede superar el producto bruto de las cuotas
+      // (Protege de la correlación negativa donde el motor matemático dispara la cuota a infinito)
+      // BLINDAJE 2: La cuota SGP jamás puede ser MENOR que apostar a la opción más difícil por separado.
+      cuotaStd = Math.max(maximaIndividual, Math.min(productoIrreal, cuotaTeorica));
   }
   
   const cuotaCust = customLegs.reduce((a, b) => a * b.cuota, 1);
-  return Math.max(1.01, cuotaStd * cuotaCust);
+  return Math.max(1.05, cuotaStd * cuotaCust);
 }
 
 function calcularEstadisticasGlobales(historial) {
@@ -503,7 +506,6 @@ function efectoContextual(registrosJugador, filtro, pseudoN) {
   const n = subset.length;
   if (n === 0) return { efecto: 0, n: 0, victorias: 0 };
   const victorias = subset.filter((r) => r.gano).length;
-  // Multiplicamos el impacto por el margen (mov)
   const mediaResiduo = subset.reduce((s, r) => s + (((r.gano ? 1 : 0) - r.pElo) * r.mov), 0) / n;
   const atenuado = mediaResiduo * (n / (n + pseudoN));
   const acotado = Math.max(-TOPE_EFECTO_INDIVIDUAL, Math.min(TOPE_EFECTO_INDIVIDUAL, atenuado));
@@ -539,7 +541,6 @@ function probabilidadYDetalle(historialPrevio, nombreA, nombreB, ratingA, rating
   return { pA, pB: 1 - pA, detalleA: efA.detalle, detalleB: efB.detalle, h2h: efH2H };
 }
 
-// REGISTROS H2H ACTUALIZADOS PARA GUARDAR EL MOV
 function construirRegistrosH2H(historial) {
   const registros = {};
   historial.forEach((p) => {
@@ -569,7 +570,6 @@ function efectoH2H(registrosH2H, nombreA, nombreB) {
   const n = regs.length;
   const victorias = regs.filter((r) => r.gano).length;
   
-  // Ahora el efecto H2H depende de la dureza de las victorias/derrotas (r.mov)
   const mediaResiduo = regs.reduce((s, r) => s + (((r.gano ? 1 : 0) - r.pElo) * r.mov), 0) / n;
   
   const atenuado = mediaResiduo * (n / (n + 2.5));
@@ -760,7 +760,6 @@ function construirEstadoDesdeHistorialReal() {
     const ganoA = m.pa > m.pb;
     let deltaA, deltaB;
     
-    // APLICAMOS MOV EN LA CARGA DEL HISTORIAL
     const movMulti = calcularMovMulti(m.pa, m.pb);
 
     if (equipoA.length === 1 && equipoB.length === 1) {
@@ -773,7 +772,7 @@ function construirEstadoDesdeHistorialReal() {
       const r = actualizarEloEquipo(
         equipoA.map((n) => jugadores[n]), m.ladoA ?? null,
         equipoB.map((n) => jugadores[n]), m.ladoB ?? null,
-        ganoA, m.pa, m.pb // Ahora le pasamos puntos
+        ganoA, m.pa, m.pb
       );
       deltaA = r.deltaA; deltaB = r.deltaB;
     }
@@ -1518,8 +1517,8 @@ export default function CasaApuestasPingpong() {
     const valorLimpio = editarCuotaInput.trim().replace(',', '.');
     const val = valorLimpio ? Number(valorLimpio) : null;
 
-    if (valorLimpio && (!val || val < 1.01)) {
-      setError("La cuota debe ser 1.01 o más.");
+    if (valorLimpio && (!val || val < 1.05)) {
+      setError("La cuota debe ser 1.05 o más.");
       return;
     }
     
@@ -1665,8 +1664,8 @@ export default function CasaApuestasPingpong() {
     const mSel = seleccionMercadoCustom.trim();
     const mCuotaVal = Number(cuotaMercadoCustom.trim().replace(',', '.'));
 
-    if (!mNombre || !mSel || isNaN(mCuotaVal) || mCuotaVal < 1.01) {
-      setError("Rellena todos los campos con valores válidos (cuota debe ser 1.01 o más).");
+    if (!mNombre || !mSel || isNaN(mCuotaVal) || mCuotaVal < 1.05) {
+      setError("Rellena todos los campos con valores válidos (cuota debe ser 1.05 o más).");
       return;
     }
 
@@ -1730,7 +1729,6 @@ export default function CasaApuestasPingpong() {
     
     const { gm, pendiente } = actualizarTitulo(estado.gm, estado.pendiente, partido.esGM, ganador);
 
-    // ELO con MOV integrado
     const resElo = actualizarEloEquipo([ratingA0], partido.ladoA, [ratingB0], partido.ladoB, ganoA, pa, pb);
     const nuevoA = ratingA0 + resElo.deltaA;
     const nuevoB = ratingB0 + resElo.deltaB;
