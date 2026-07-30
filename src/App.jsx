@@ -3,7 +3,113 @@ import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCc
 
 const RATING_INICIAL = 1000;
 const K_FACTOR = 32;
-const SD_PUNTOS = 4;
+
+// --- NUEVO MOTOR MATEMÁTICO BASADO EN HISTORIAL REAL DE PUNTOS ---
+
+function analizarImpactoContexto(historial, nombre, esLado, solEnContra, viento, esGM) {
+  let ptsAFavor = 0, ptsEnContra = 0;
+  let ptsAFavorCtx = 0, ptsEnContraCtx = 0;
+
+  historial.forEach(m => {
+    if (!m.teamA || !m.teamB || m.teamA.length !== 1 || m.teamB.length !== 1) return;
+    const esA = m.teamA[0] === nombre;
+    const esB = m.teamB[0] === nombre;
+    if (!esA && !esB) return;
+
+    const misPts = esA ? m.pa : m.pb;
+    const susPts = esA ? m.pb : m.pa;
+    const miLado = esA ? m.ladoA : m.ladoB;
+    const teniaSol = m.solLado === miLado;
+
+    ptsAFavor += misPts;
+    ptsEnContra += susPts;
+
+    // Si coincide el contexto que estamos evaluando
+    let coincide = true;
+    if (esLado && miLado !== esLado) coincide = false;
+    if (solEnContra && !teniaSol) coincide = false;
+    if (viento && !m.viento) coincide = false;
+    if (esGM && !m.esGM) coincide = false;
+
+    if (coincide) {
+      ptsAFavorCtx += misPts;
+      ptsEnContraCtx += susPts;
+    }
+  });
+
+  const winRateGlobal = ptsAFavor / (ptsAFavor + ptsEnContra || 1);
+  const winRateCtx = ptsAFavorCtx / (ptsAFavorCtx + ptsEnContraCtx || 1);
+
+  // Suavizado para pocos datos (asumimos que rinde igual que el global hasta tener pruebas de lo contrario)
+  const PESO_PRIOR = 40; 
+  const winRateSuavizado = ((winRateCtx * (ptsAFavorCtx + ptsEnContraCtx)) + (winRateGlobal * PESO_PRIOR)) / ((ptsAFavorCtx + ptsEnContraCtx) + PESO_PRIOR);
+
+  return winRateGlobal === 0 ? 1 : winRateSuavizado / winRateGlobal;
+}
+
+function calcularProbabilidadPuntoPura(historial, nombreA, nombreB, ctx) {
+  let pA_H2H = 0, pB_H2H = 0;
+  let pA_Global = 0, pContraA_Global = 0;
+  let pB_Global = 0, pContraB_Global = 0;
+
+  historial.forEach(m => {
+    if (!m.teamA || !m.teamB || m.teamA.length !== 1 || m.teamB.length !== 1) return;
+    const esAA = m.teamA[0] === nombreA, esAB = m.teamB[0] === nombreA;
+    const esBA = m.teamA[0] === nombreB, esBB = m.teamB[0] === nombreB;
+
+    if (esAA || esAB) {
+       pA_Global += esAA ? m.pa : m.pb;
+       pContraA_Global += esAA ? m.pb : m.pa;
+    }
+    if (esBA || esBB) {
+       pB_Global += esBA ? m.pa : m.pb;
+       pContraB_Global += esBA ? m.pb : m.pa;
+    }
+
+    if ((esAA && esBB) || (esAB && esBA)) {
+       pA_H2H += esAA ? m.pa : m.pb;
+       pB_H2H += esAA ? m.pb : m.pa;
+    }
+  });
+
+  const winRateH2H = pA_H2H / (pA_H2H + pB_H2H || 1);
+  const winRateGlobalA = pA_Global / (pA_Global + pContraA_Global || 1);
+  const winRateGlobalB = pB_Global / (pB_Global + pContraB_Global || 1);
+  const winRateGlobalCruzado = (winRateGlobalA + (1 - winRateGlobalB)) / 2;
+
+  let pPuntoBase;
+  const totalH2H = pA_H2H + pB_H2H;
+  
+  if (totalH2H >= 21) {
+      // Prioridad 1: H2H manda (70% H2H, 20% Global, 10% Suavizado de realidad)
+      pPuntoBase = (winRateH2H * 0.70) + (winRateGlobalCruzado * 0.20) + (0.5 * 0.10);
+  } else if (pA_Global > 0 || pB_Global > 0) {
+      // Prioridad 2: Historial Global 
+      pPuntoBase = (winRateGlobalCruzado * 0.85) + (0.5 * 0.15);
+  } else {
+      // Prioridad 3: Sin datos (50/50)
+      pPuntoBase = 0.5;
+  }
+
+  // Modificadores de contexto individualizados
+  const modLadoA = ctx.ladoA ? analizarImpactoContexto(historial, nombreA, ctx.ladoA, false, false, false) : 1;
+  const modSolA = ctx.solLado === ctx.ladoA ? analizarImpactoContexto(historial, nombreA, null, true, false, false) : 1;
+  const modVientoA = ctx.viento ? analizarImpactoContexto(historial, nombreA, null, false, true, false) : 1;
+  const modGmA = ctx.esGM ? analizarImpactoContexto(historial, nombreA, null, false, false, true) : 1;
+
+  const modLadoB = ctx.ladoB ? analizarImpactoContexto(historial, nombreB, ctx.ladoB, false, false, false) : 1;
+  const modSolB = ctx.solLado === ctx.ladoB ? analizarImpactoContexto(historial, nombreB, null, true, false, false) : 1;
+  const modVientoB = ctx.viento ? analizarImpactoContexto(historial, nombreB, null, false, true, false) : 1;
+  const modGmB = ctx.esGM ? analizarImpactoContexto(historial, nombreB, null, false, false, true) : 1;
+
+  const multiA = modLadoA * modSolA * modVientoA * modGmA;
+  const multiB = modLadoB * modSolB * modVientoB * modGmB;
+
+  let pFinalA = pPuntoBase * multiA;
+  let pFinalB = (1 - pPuntoBase) * multiB;
+
+  return Math.min(0.95, Math.max(0.05, pFinalA / (pFinalA + pFinalB))); 
+}
 
 function calcularMovMulti(pa, pb) {
   const diff = Math.abs(pa - pb);
@@ -15,23 +121,11 @@ function expectedScore(rA, rB) {
   return 1 / (1 + Math.pow(10, (rB - rA) / 400));
 }
 
-function erf(x) {
-  const sign = x < 0 ? -1 : 1;
-  x = Math.abs(x);
-  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741,
-        a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
-  const t = 1 / (1 + p * x);
-  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-  return sign * y;
-}
-function normCDF(x, mean, sd) {
-  return 0.5 * (1 + erf((x - mean) / (sd * Math.SQRT2)));
-}
-
 function isParcial(a, b) {
   return (a === 7 && b === 0) || (a === 0 && b === 7) ||
          (a === 9 && b === 1) || (a === 1 && b === 9) ||
-         (a === 11 && b === 2) || (a === 2 && b === 11);
+         (a === 11 && b === 2) || (a === 2 && b === 11) ||
+         (a === 21 && b <= 2) || (b === 21 && a <= 2);
 }
 
 function isValidScore(a, b) {
@@ -39,19 +133,6 @@ function isValidScore(a, b) {
   if ((a === 21 && b <= 19) || (b === 21 && a <= 19)) return true;
   if (a >= 20 && b >= 20 && Math.abs(a - b) === 2) return true;
   return isParcial(a, b);
-}
-
-function probPuntosIndividual(terminales, pts, isA) {
-  let p = 0;
-  terminales.forEach(t => {
-    if ((isA && t.a === pts) || (!isA && t.b === pts)) p += t.p;
-  });
-  return p;
-}
-
-function probDesdeTerminales(terminales, pa, pb) {
-  const t = terminales.find(t => t.a === pa && t.b === pb);
-  return t ? t.p : 0;
 }
 
 function calcularTerminales(pA) {
@@ -74,95 +155,60 @@ function calcularTerminales(pA) {
   return term;
 }
 
-function getEmpiricalRates(historial, a, b) {
-  let p = 0, n = 0, aj = 0, total = 0;
-  const matches = historial.filter(m => (m.teamA?.includes(a) || m.teamB?.includes(a)) || (m.teamA?.includes(b) || m.teamB?.includes(b)));
-  
-  matches.forEach(m => {
-      if (isParcial(m.pa, m.pb)) p++;
-      else if (m.pa >= 22 || m.pb >= 22) aj++;
-      else n++;
-      total++;
-  });
-  
-  const priorP = 0.03 * 25;
-  const priorN = 0.82 * 25;
-  const priorAj = 0.15 * 25;
-  
-  const smoothTotal = total + 25;
-  return {
-      p: (p + priorP) / smoothTotal,
-      n: (n + priorN) / smoothTotal,
-      aj: (aj + priorAj) / smoothTotal,
-  };
-}
-
 // CAP DE CUOTAS LIMITADO A LA REALIDAD
 function cuota(p, margen) {
-  // Aseguramos una probabilidad mínima del 0.4% para evitar cuotas infinitas (techo realista de 250)
-  const pSegura = Math.max(0.004, p); 
+  const pSegura = Math.max(0.004, p); // Suelo real de posibilidad
   const conMargen = (1 / pSegura) / (1 + margen);
-  // Suelo de 1.05, Techo de 250.00
   return Number(Math.max(1.05, Math.min(250.00, conMargen)).toFixed(2));
 }
 
-function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombreB) {
-  const pB = 1 - pA;
-  const closeness = 1 - Math.abs(2 * pA - 1);
-  const perdedorEsperado = Math.round(19 * closeness);
-
-  const ganador = { A: cuota(pA, margen), B: cuota(pB, margen), pA, pB };
-  let terminales = calcularTerminales(pA);
-
-  const perdedorEsperadoA = perdedorEsperadoJugador(historial, nombreA, perdedorEsperado);
-  const perdedorEsperadoB = perdedorEsperadoJugador(historial, nombreB, perdedorEsperado);
-
-  const handicaps = [3, 6, 10].map((k) => cuotaHandicap(pA, pB, perdedorEsperadoB, perdedorEsperadoA, margen, k));
-
-  const esperadoA = pA * 21 + (1 - pA) * perdedorEsperadoA;
-  const esperadoB = pB * 21 + (1 - pB) * perdedorEsperadoB;
-  const puntosA = cuotaPuntosDefecto(pA, perdedorEsperadoA, esperadoA, margen);
-  const puntosB = cuotaPuntosDefecto(pB, perdedorEsperadoB, esperadoB, margen);
-
-  const empRates = getEmpiricalRates(historial, nombreA, nombreB);
-  let dpP = 0, dpN = 0, dpAj = 0;
-  terminales.forEach(t => {
-      if (isParcial(t.a, t.b)) dpP += t.p;
-      else if (t.a >= 22 || t.b >= 22) dpAj += t.p;
-      else dpN += t.p;
-  });
-
-  let probSumaCheck = 0;
-  terminales.forEach(t => {
-      if (isParcial(t.a, t.b)) t.p = t.p * (empRates.p / (dpP || 1));
-      else if (t.a >= 22 || t.b >= 22) t.p = t.p * (empRates.aj / (dpAj || 1));
-      else t.p = t.p * (empRates.n / (dpN || 1));
-      probSumaCheck += t.p;
-  });
-
-  // SUAVIZADO LAPLACIANO PARA PUNTOS EXACTOS
-  // Inyectamos una probabilidad base a TODOS los terminales válidos para que ninguno sea "imposible"
-  const BASELINE_PROB = 0.005; 
-  let nuevaSumaSuavizada = 0;
-  terminales.forEach(t => { 
-      t.p = (t.p / probSumaCheck) * 0.85 + BASELINE_PROB; // 85% modelo + ruido base
-      nuevaSumaSuavizada += t.p; 
-  });
+function calcularMercadosDesdeProbabilidad(pA_punto, margen, nombreA, nombreB) {
+  let terminales = calcularTerminales(pA_punto);
   
-  terminales.forEach(t => { t.p = t.p / nuevaSumaSuavizada; }); // Renormalizamos
-
+  let pGanaA = 0, pGanaB = 0;
+  let expA = 0, expB = 0;
   let probParciales = 0, probAjustado = 0, probNormal = 0;
+
   terminales.forEach(t => {
+      if (t.a > t.b) pGanaA += t.p;
+      else pGanaB += t.p;
+      
+      expA += t.a * t.p;
+      expB += t.b * t.p;
+
       if (isParcial(t.a, t.b)) probParciales += t.p;
       else if (t.a >= 22 || t.b >= 22) probAjustado += t.p;
       else probNormal += t.p;
   });
+
+  const ganador = { A: cuota(pGanaA, margen), B: cuota(pGanaB, margen), pA: pGanaA, pB: pGanaB };
 
   const comoTermina = {
     parciales: cuota(probParciales, margen),
     normal: cuota(probNormal, margen),
     ajustado: cuota(probAjustado, margen),
   };
+
+  const handicaps = [3, 6, 10].map(k => {
+      let pHandA = 0, pHandB = 0;
+      terminales.forEach(t => {
+          if (t.a - t.b >= k) pHandA += t.p;
+          if (t.b - t.a >= k) pHandB += t.p;
+      });
+      return { k, cuotaA: cuota(pHandA, margen), cuotaB: cuota(pHandB, margen) };
+  });
+
+  const lineaA = Math.max(3.5, Math.floor(expA) + 0.5);
+  const lineaB = Math.max(3.5, Math.floor(expB) + 0.5);
+
+  let pMasA = 0, pMasB = 0;
+  terminales.forEach(t => {
+      if (t.a > lineaA) pMasA += t.p;
+      if (t.b > lineaB) pMasB += t.p;
+  });
+
+  const puntosA = { linea: lineaA, cuotaMas: cuota(pMasA, margen), cuotaMenos: cuota(1-pMasA, margen) };
+  const puntosB = { linea: lineaB, cuotaMas: cuota(pMasB, margen), cuotaMenos: cuota(1-pMasB, margen) };
 
   const resultadosExactos = [
     { marcador: `21-12`, p: terminales.find(t => t.a === 21 && t.b === 12)?.p || 0 },
@@ -173,26 +219,7 @@ function calcularMercadosDesdeProbabilidad(pA, margen, historial, nombreA, nombr
     { marcador: `19-21`, p: terminales.find(t => t.a === 19 && t.b === 21)?.p || 0 },
   ].map(res => ({ marcador: res.marcador, cuota: cuota(res.p, margen) }));
 
-  return { ganador, handicaps, puntosA, puntosB, esperadoA, esperadoB, comoTermina, resultadosExactos, terminales, perdedorEsperado, perdedorEsperadoA, perdedorEsperadoB };
-}
-
-function perdedorEsperadoJugador(historial, nombre, generico) {
-  if (!nombre) return generico;
-  const marcasAlPerder = [];
-  historial.forEach((p) => {
-    if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
-    const esA = p.teamA[0] === nombre;
-    const esB = p.teamB[0] === nombre;
-    if (!esA && !esB) return;
-    const suMarca = esA ? p.pa : p.pb;
-    const suRivalMarca = esA ? p.pb : p.pa;
-    if (suMarca > suRivalMarca) return;
-    marcasAlPerder.push(suMarca);
-  });
-  if (marcasAlPerder.length === 0) return generico;
-  const media = marcasAlPerder.reduce((s, x) => s + x, 0) / marcasAlPerder.length;
-  const PESO = 4;
-  return (media * marcasAlPerder.length + generico * PESO) / (marcasAlPerder.length + PESO);
+  return { ganador, handicaps, puntosA, puntosB, esperadoA: expA, esperadoB: expB, comoTermina, resultadosExactos, terminales };
 }
 
 const TOPE_AJUSTE_DINERO = 0.15;
@@ -235,31 +262,6 @@ function boostDe(partido, mercado, seleccion) {
   return (typeof v === "number" && v >= 1.05) ? v : null;
 }
 
-function cuotaHandicap(pA, pB, perdedorEsperadoSiPierdeB, perdedorEsperadoSiPierdeA, margen, k) {
-  const probA = pA * normCDF(21 - k + 0.5, perdedorEsperadoSiPierdeB, SD_PUNTOS);
-  const probB = pB * normCDF(21 - k + 0.5, perdedorEsperadoSiPierdeA, SD_PUNTOS);
-  return { k, cuotaA: cuota(probA, margen), cuotaB: cuota(probB, margen) };
-}
-
-function probSuperaLinea(pWin, perdedorEsperado, linea) {
-  if (linea < 21) {
-    const pSiPierde = 1 - normCDF(linea, perdedorEsperado, SD_PUNTOS);
-    return pWin * 1 + (1 - pWin) * pSiPierde;
-  }
-  const pSiGana = 1 - normCDF(linea, 21, SD_PUNTOS);
-  const pSiPierde = 1 - normCDF(linea, perdedorEsperado, SD_PUNTOS);
-  return pWin * pSiGana + (1 - pWin) * pSiPierde;
-}
-
-function cuotaPuntos(pWin, perdedorEsperado, margen, linea) {
-  const probMas = Math.min(0.98, Math.max(0.02, probSuperaLinea(pWin, perdedorEsperado, linea)));
-  return { linea, cuotaMas: cuota(probMas, margen), cuotaMenos: cuota(1 - probMas, margen) };
-}
-function cuotaPuntosDefecto(pWin, perdedorEsperado, esperado, margen) {
-  const linea = Math.min(19.5, Math.max(4.5, Math.floor(esperado) + 0.5));
-  return cuotaPuntos(pWin, perdedorEsperado, margen, linea);
-}
-
 function ladoConSentido(cuotaMas, cuotaMenos) {
   const CASI_SEGURO = 1.10;
   const masEsSeguro = cuotaMas <= CASI_SEGURO;
@@ -268,53 +270,6 @@ function ladoConSentido(cuotaMas, cuotaMenos) {
   if (masEsSeguro) return { mostrarMas: false, mostrarMenos: true };
   if (menosEsSeguro) return { mostrarMas: true, mostrarMenos: false };
   return { mostrarMas: true, mostrarMenos: true };
-}
-
-function rangoPuntosSensato(historial, nombre) {
-  const puntos = [];
-  historial.forEach((p) => {
-    if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
-    if (p.teamA[0] === nombre) puntos.push(p.pa);
-    if (p.teamB[0] === nombre) puntos.push(p.pb);
-  });
-  if (puntos.length < 3) return { min: 6, max: 17 };
-  const minObs = Math.min(...puntos);
-  const maxObs = Math.max(...puntos);
-  let min = Math.max(3, minObs - 2);
-  let max = Math.min(20, maxObs + 1);
-  const ANCHURA_MINIMA = 11;
-  if (max - min < ANCHURA_MINIMA) {
-    const centro = (max + min) / 2;
-    min = Math.max(3, Math.round(centro - ANCHURA_MINIMA / 2));
-    max = Math.min(20, Math.round(centro + ANCHURA_MINIMA / 2));
-  }
-  return { min: Math.min(min, max - 2), max: Math.max(max, min + 2) };
-}
-
-function rangoHandicapSensato(pA, pB, perdedorEsperadoA, perdedorEsperadoB, margen) {
-  let max = 3;
-  for (let k = 3; k <= 19; k++) {
-    const h = cuotaHandicap(pA, pB, perdedorEsperadoB, perdedorEsperadoA, margen, k);
-    const cuotaFavorito = Math.min(h.cuotaA, h.cuotaB);
-    if (cuotaFavorito >= 45) break;
-    max = k;
-  }
-  return { min: 3, max: Math.max(6, max) };
-}
-
-function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, pa, pb) {
-  const avgA = ratingsA.reduce((s, r) => s + r, 0) / ratingsA.length;
-  const avgB = ratingsB.reduce((s, r) => s + r, 0) / ratingsB.length;
-  const pA = expectedScore(avgA, avgB);
-  const pB = 1 - pA;
-  const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
-  
-  const movAjuste = calcularMovMulti(pa, pb);
-
-  return { 
-    deltaA: K_FACTOR * movAjuste * (sA - pA), 
-    deltaB: K_FACTOR * movAjuste * (sB - pB) 
-  };
 }
 
 function evaluarPata(mercado, seleccion, ctx, customResults = {}) {
@@ -381,7 +336,6 @@ function sonContradictorias(a, b, partido) {
         vecesGananAmbas++;
     }
   }
-  
   return vecesGananAmbas === 0;
 }
 
@@ -408,13 +362,25 @@ function calcularCuotaSGP(slip, mercados, partido, margen) {
       const maximaIndividual = stdLegs.reduce((max, leg) => Math.max(max, leg.cuota), 1);
 
       // BLINDAJE 1: La cuota SGP jamás puede superar el producto bruto de las cuotas
-      // (Protege de la correlación negativa donde el motor matemático dispara la cuota a infinito)
       // BLINDAJE 2: La cuota SGP jamás puede ser MENOR que apostar a la opción más difícil por separado.
       cuotaStd = Math.max(maximaIndividual, Math.min(productoIrreal, cuotaTeorica));
   }
   
   const cuotaCust = customLegs.reduce((a, b) => a * b.cuota, 1);
   return Math.max(1.05, cuotaStd * cuotaCust);
+}
+
+function probPuntosIndividual(terminales, pts, isA) {
+    let p = 0;
+    terminales.forEach(t => {
+      if ((isA && t.a === pts) || (!isA && t.b === pts)) p += t.p;
+    });
+    return p;
+  }
+  
+function probDesdeTerminales(terminales, pa, pb) {
+    const t = terminales.find(t => t.a === pa && t.b === pb);
+    return t ? t.p : 0;
 }
 
 function calcularEstadisticasGlobales(historial) {
@@ -479,66 +445,19 @@ function actualizarTitulo(gm, pendiente, esGM, ganador) {
   return { gm, pendiente: ganador };
 }
 
-function construirRegistrosPorJugador(historial) {
-  const registros = {};
-  historial.forEach((p) => {
-    if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
-    if (!p.ladoA || !p.ladoB) return;
-    const [a] = p.teamA, [b] = p.teamB;
-    const ratingA = p.ratingsAntes?.[a] ?? RATING_INICIAL;
-    const ratingB = p.ratingsAntes?.[b] ?? RATING_INICIAL;
-    const pEloA = expectedScore(ratingA, ratingB);
-    const ganoA = p.pa > p.pb;
-    const movMulti = calcularMovMulti(p.pa, p.pb);
+function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, pa, pb) {
+  const avgA = ratingsA.reduce((s, r) => s + r, 0) / ratingsA.length;
+  const avgB = ratingsB.reduce((s, r) => s + r, 0) / ratingsB.length;
+  const pA = expectedScore(avgA, avgB);
+  const pB = 1 - pA;
+  const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
+  
+  const movAjuste = calcularMovMulti(pa, pb);
 
-    if (!registros[a]) registros[a] = [];
-    if (!registros[b]) registros[b] = [];
-    registros[a].push({ lado: p.ladoA, gano: ganoA, pElo: pEloA, mov: movMulti, solLeMolesta: p.solLado === p.ladoA, viento: !!p.viento });
-    registros[b].push({ lado: p.ladoB, gano: !ganoA, pElo: 1 - pEloA, mov: movMulti, solLeMolesta: p.solLado === p.ladoB, viento: !!p.viento });
-  });
-  return registros;
-}
-
-const TOPE_EFECTO_INDIVIDUAL = 0.12;
-function efectoContextual(registrosJugador, filtro, pseudoN) {
-  if (!registrosJugador) return { efecto: 0, n: 0, victorias: 0 };
-  const subset = registrosJugador.filter(filtro);
-  const n = subset.length;
-  if (n === 0) return { efecto: 0, n: 0, victorias: 0 };
-  const victorias = subset.filter((r) => r.gano).length;
-  const mediaResiduo = subset.reduce((s, r) => s + (((r.gano ? 1 : 0) - r.pElo) * r.mov), 0) / n;
-  const atenuado = mediaResiduo * (n / (n + pseudoN));
-  const acotado = Math.max(-TOPE_EFECTO_INDIVIDUAL, Math.min(TOPE_EFECTO_INDIVIDUAL, atenuado));
-  return { efecto: acotado, n, victorias };
-}
-
-const TOPE_EFECTO_TOTAL = 0.22;
-function calcularEfectosJugador(registros, nombre, lado, solLado, viento) {
-  const regs = registros[nombre];
-  const efLado = efectoContextual(regs, (r) => r.lado === lado, 6);
-  const efSol = efectoContextual(regs, (r) => r.solLeMolesta === (solLado === lado), 5);
-  const efViento = efectoContextual(regs, (r) => r.viento === !!viento, 6);
-  const sumaBruta = efLado.efecto + efSol.efecto + efViento.efecto;
-  const total = Math.max(-TOPE_EFECTO_TOTAL, Math.min(TOPE_EFECTO_TOTAL, sumaBruta));
-  return {
-    total,
-    detalle: { lado: efLado, sol: efSol, viento: efViento },
+  return { 
+    deltaA: K_FACTOR * movAjuste * (sA - pA), 
+    deltaB: K_FACTOR * movAjuste * (sB - pB) 
   };
-}
-
-function probabilidadYDetalle(historialPrevio, nombreA, nombreB, ratingA, ratingB, ladoA, ladoB, solLado, viento) {
-  const registros = construirRegistrosPorJugador(historialPrevio);
-  const registrosH2H = construirRegistrosH2H(historialPrevio);
-  const pEloBase = expectedScore(ratingA, ratingB);
-  const efA = calcularEfectosJugador(registros, nombreA, ladoA, solLado, viento);
-  const efB = calcularEfectosJugador(registros, nombreB, ladoB, solLado, viento);
-  const efH2H = efectoH2H(registrosH2H, nombreA, nombreB);
-  const EPS = 0.03;
-  const pAdjA = Math.min(1 - EPS, Math.max(EPS, pEloBase + efA.total));
-  const pAdjB = Math.min(1 - EPS, Math.max(EPS, (1 - pEloBase) + efB.total));
-  let pA = pAdjA / (pAdjA + pAdjB);
-  pA = Math.min(1 - EPS, Math.max(EPS, pA + efH2H.efecto));
-  return { pA, pB: 1 - pA, detalleA: efA.detalle, detalleB: efB.detalle, h2h: efH2H };
 }
 
 function construirRegistrosH2H(historial) {
@@ -561,20 +480,6 @@ function construirRegistrosH2H(historial) {
     registros[b][a].push({ gano: !ganoA, pElo: 1 - pEloA, mov: movMulti, partido: p });
   });
   return registros;
-}
-
-const TOPE_H2H = 0.3;
-function efectoH2H(registrosH2H, nombreA, nombreB) {
-  const regs = registrosH2H[nombreA]?.[nombreB];
-  if (!regs || regs.length === 0) return { efecto: 0, n: 0, victorias: 0 };
-  const n = regs.length;
-  const victorias = regs.filter((r) => r.gano).length;
-  
-  const mediaResiduo = regs.reduce((s, r) => s + (((r.gano ? 1 : 0) - r.pElo) * r.mov), 0) / n;
-  
-  const atenuado = mediaResiduo * (n / (n + 2.5));
-  const acotado = Math.max(-TOPE_H2H, Math.min(TOPE_H2H, atenuado));
-  return { efecto: acotado, n, victorias };
 }
 
 function calcularRacha(historial, nombre) {
@@ -928,29 +833,6 @@ function Panel({ icon: Icon, titulo, children, badge }) {
   );
 }
 
-function AnalisisColumna({ nombre, detalle }) {
-  const filas = [
-    { label: "En este campo", d: detalle.lado },
-    { label: "Con este sol", d: detalle.sol },
-    { label: "Con este viento", d: detalle.viento },
-  ];
-  return (
-    <div className="space-y-1 min-w-0">
-      <div className="text-xs font-bold c-text-1 truncate">{nombre}</div>
-      {filas.map((f, i) => (
-        <div key={i} className="text-[10.5px] flex justify-between gap-2">
-          <span className="c-text-2 truncate">{f.label}</span>
-          {f.d.n > 0 ? (
-            <span className="font-mono c-text-3 shrink-0">{f.d.victorias}V-{f.d.n - f.d.victorias}D ({Math.round((100 * f.d.victorias) / f.d.n)}%)</span>
-          ) : (
-            <span className="c-text-4 shrink-0">sin datos</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function CondicionesBadges({ hora, ladoA, ladoB, solLado, viento, nombreA, nombreB }) {
   if (!hora && !ladoA && !solLado && !viento) return null;
   return (
@@ -1280,8 +1162,17 @@ export default function CasaApuestasPingpong() {
     if (!estado?.partidoAbierto) return;
     const partidoActual = estado.partidoAbierto;
     
-    const analisisTemp = probabilidadYDetalle(estado.historial, partidoActual.a, partidoActual.b, ratingDe(partidoActual.a), ratingDe(partidoActual.b), partidoActual.ladoA, partidoActual.ladoB, partidoActual.solLado, partidoActual.viento);
-    const mercadosTemp = calcularMercadosDesdeProbabilidad(analisisTemp.pA, estado.margen, estado.historial, partidoActual.a, partidoActual.b);
+    const ctxPartido = { 
+      ladoA: partidoActual.ladoA, 
+      ladoB: partidoActual.ladoB, 
+      solLado: partidoActual.solLado, 
+      viento: partidoActual.viento, 
+      esGM: partidoActual.esGM 
+    };
+
+    const pA_punto = calcularProbabilidadPuntoPura(estado.historial, partidoActual.a, partidoActual.b, ctxPartido);
+    const mercadosTemp = calcularMercadosDesdeProbabilidad(pA_punto, estado.margen, partidoActual.a, partidoActual.b);
+    
     const stakeA = sumaStakeGanador(partidoActual.apuestas, partidoActual.a);
     const stakeB = sumaStakeGanador(partidoActual.apuestas, partidoActual.b);
     const ganDineroTemp = cuotaGanadorConDinero(mercadosTemp.ganador.pA, estado.margen, stakeA, stakeB);
@@ -1475,17 +1366,9 @@ export default function CasaApuestasPingpong() {
       hora: horaInput, ladoA: ladoAInput, ladoB: ladoBAuto, solLado: solLadoInput, viento: vientoInput,
       mercadosCustom: []
     };
-    const rProb = probabilidadYDetalle(estado.historial, selA, selB, ratingDe(selA), ratingDe(selB), ladoAInput, ladoBAuto, solLadoInput, vientoInput);
-    const perdGenerico = Math.round(19 * (1 - Math.abs(2 * rProb.pA - 1)));
-    const perdEsA = perdedorEsperadoJugador(estado.historial, selA, perdGenerico);
-    const perdEsB = perdedorEsperadoJugador(estado.historial, selB, perdGenerico);
-    const rH = rangoHandicapSensato(rProb.pA, rProb.pB, perdEsA, perdEsB, estado.margen);
-    const rA = rangoPuntosSensato(estado.historial, selA);
-    const rB = rangoPuntosSensato(estado.historial, selB);
-    setHandicapK(Math.round((rH.min + rH.max) / 2));
-    setLineaA(Math.round((rA.min + rA.max) / 2));
-    setLineaB(Math.round((rB.min + rB.max) / 2));
     persistir({ ...estado, partidoAbierto: nuevo });
+    
+    // Reset inputs
     setSelA(""); setSelB(""); setEsGM(false); setSolLadoInput(null); setVientoInput(false);
   }
 
@@ -1820,10 +1703,15 @@ export default function CasaApuestasPingpong() {
     setConfirmBorrar(false);
   }
 
-  const analisis = partido
-    ? probabilidadYDetalle(estado.historial, partido.a, partido.b, ratingDe(partido.a), ratingDe(partido.b), partido.ladoA, partido.ladoB, partido.solLado, partido.viento)
-    : null;
-  const mercados = partido && analisis ? calcularMercadosDesdeProbabilidad(analisis.pA, estado.margen, estado.historial, partido.a, partido.b) : null;
+  // --- DERIVACIÓN DE DATOS PARA LA VISTA ---
+  let pA_punto = null, mercados = null, ctxPartido = null;
+
+  if (partido) {
+    ctxPartido = { ladoA: partido.ladoA, ladoB: partido.ladoB, solLado: partido.solLado, viento: partido.viento, esGM: partido.esGM };
+    pA_punto = calcularProbabilidadPuntoPura(estado.historial, partido.a, partido.b, ctxPartido);
+    mercados = calcularMercadosDesdeProbabilidad(pA_punto, estado.margen, partido.a, partido.b);
+  }
+
   const stakeGanadorA = partido ? sumaStakeGanador(partido.apuestas, partido.a) : 0;
   const stakeGanadorB = partido ? sumaStakeGanador(partido.apuestas, partido.b) : 0;
   const ganadorConDinero = mercados ? cuotaGanadorConDinero(mercados.ganador.pA, estado.margen, stakeGanadorA, stakeGanadorB) : null;
@@ -1840,15 +1728,32 @@ export default function CasaApuestasPingpong() {
   const bGanadorB = ganadorConDinero ? conBoost("Ganador", partido.b, ganadorConDinero.B) : null;
   const rachaA = partido ? calcularRacha(estado.historial, partido.a) : 0;
   const rachaB = partido ? calcularRacha(estado.historial, partido.b) : 0;
-  const rangoH = partido && mercados ? rangoHandicapSensato(mercados.ganador.pA, mercados.ganador.pB, mercados.perdedorEsperadoA, mercados.perdedorEsperadoB, estado.margen) : { min: 3, max: 10 };
-  const rangoA = partido ? rangoPuntosSensato(estado.historial, partido.a) : { min: 6, max: 17 };
-  const rangoB = partido ? rangoPuntosSensato(estado.historial, partido.b) : { min: 6, max: 17 };
+  
+  // Limitar handicap al realismo de la probabilidad
+  let maxHandicap = 3;
+  if (mercados) {
+      for(let k=4; k<=19; k++){
+          const match = mercados.handicaps.find(h => h.k === k);
+          if(match && Math.min(match.cuotaA, match.cuotaB) < 15) maxHandicap = k;
+      }
+  }
+  const rangoH = partido && mercados ? { min: 3, max: Math.max(3, maxHandicap) } : { min: 3, max: 10 };
   const handicapKClamp = Math.min(rangoH.max, Math.max(rangoH.min, handicapK));
-  const lineaAClamp = Math.min(rangoA.max, Math.max(rangoA.min, lineaA));
-  const lineaBClamp = Math.min(rangoB.max, Math.max(rangoB.min, lineaB));
-  const handicapVivo = mercados ? cuotaHandicap(mercados.ganador.pA, mercados.ganador.pB, mercados.perdedorEsperadoB, mercados.perdedorEsperadoA, estado.margen, handicapKClamp) : null;
-  const puntosAVivo = mercados ? cuotaPuntos(mercados.ganador.pA, mercados.perdedorEsperadoA, estado.margen, lineaAClamp) : null;
-  const puntosBVivo = mercados ? cuotaPuntos(mercados.ganador.pB, mercados.perdedorEsperadoB, estado.margen, lineaBClamp) : null;
+  const handicapVivo = mercados ? mercados.handicaps.find(h => h.k === handicapKClamp) : null;
+
+  const lineaAClamp = mercados ? Math.min(21, Math.max(0, lineaA)) : 12;
+  const lineaBClamp = mercados ? Math.min(21, Math.max(0, lineaB)) : 12;
+  
+  let pMasLineaA = 0, pMasLineaB = 0;
+  if(mercados){
+      mercados.terminales.forEach(t => {
+          if (t.a > lineaAClamp) pMasLineaA += t.p;
+          if (t.b > lineaBClamp) pMasLineaB += t.p;
+      });
+  }
+  const puntosAVivo = mercados ? { cuotaMas: cuota(pMasLineaA, estado.margen), cuotaMenos: cuota(1-pMasLineaA, estado.margen) } : null;
+  const puntosBVivo = mercados ? { cuotaMas: cuota(pMasLineaB, estado.margen), cuotaMenos: cuota(1-pMasLineaB, estado.margen) } : null;
+
   const variacionA0 = puntosAVivo ? ladoConSentido(puntosAVivo.cuotaMas, puntosAVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const variacionB0 = puntosBVivo ? ladoConSentido(puntosBVivo.cuotaMas, puntosBVivo.cuotaMenos) : { mostrarMas: true, mostrarMenos: true };
   const handicapLados0 = handicapVivo ? ladoConSentido(handicapVivo.cuotaA, handicapVivo.cuotaB) : { mostrarMas: true, mostrarMenos: true };
@@ -2145,16 +2050,6 @@ export default function CasaApuestasPingpong() {
               </div>
             )}
 
-            {!modoEspectador && analisis && (analisis.detalleA.lado.n > 0 || analisis.detalleA.sol.n > 0 || analisis.detalleA.viento.n > 0 || analisis.detalleB.lado.n > 0 || analisis.detalleB.sol.n > 0 || analisis.detalleB.viento.n > 0) && (
-              <Panel icon={Swords} titulo="Análisis de la cuota">
-                <div className="grid grid-cols-2 gap-3">
-                  <AnalisisColumna nombre={partido.a} detalle={analisis.detalleA} />
-                  <AnalisisColumna nombre={partido.b} detalle={analisis.detalleB} />
-                </div>
-                <div className="text-[10px] c-text-4 pt-1">Con pocos partidos el efecto se atenúa automáticamente.</div>
-              </Panel>
-            )}
-
             <Panel icon={Trophy} titulo="Ganador" badge={
               !modoEspectador && (
                 <div className="flex items-center gap-2">
@@ -2293,29 +2188,29 @@ export default function CasaApuestasPingpong() {
               <div className="space-y-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <input type="range" min={rangoA.min} max={rangoA.max} step={1} value={lineaAClamp}
+                    <input type="range" min={0} max={21} step={1} value={lineaAClamp}
                       onChange={(e) => setLineaA(Number(e.target.value))}
                       style={{ accentColor: "#FF5A1F" }} className="flex-1" />
-                    <span className="text-sm font-bold c-text-1 w-24 text-right">{partido.a}: {lineaAClamp}</span>
+                    <span className="text-sm font-bold c-text-1 w-24 text-right">{partido.a}: {lineaAClamp}.5</span>
                   </div>
                   {puntosAVivo && (variacionA.mostrarMas || variacionA.mostrarMenos) && (
                     <div className="flex gap-2 mt-1">
-                      {variacionA.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta="Más de" sub={`${lineaAClamp}`} valor={bPuntosAMas.valor} valorBase={bPuntosAMas.base} boosteado={bPuntosAMas.boosteado} locked={bPuntosAMas.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Más", puntosAVivo.cuotaMas, `${partido.a} más de ${lineaAClamp}`)} />}
-                      {variacionA.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta="Menos de" sub={`${lineaAClamp}`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} locked={bPuntosAMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}`)} />}
+                      {variacionA.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta="Más de" sub={`${lineaAClamp}.5`} valor={bPuntosAMas.valor} valorBase={bPuntosAMas.base} boosteado={bPuntosAMas.boosteado} locked={bPuntosAMas.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}.5`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}.5`, "Más", puntosAVivo.cuotaMas, `${partido.a} más de ${lineaAClamp}.5`)} />}
+                      {variacionA.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta="Menos de" sub={`${lineaAClamp}.5`} valor={bPuntosAMenos.valor} valorBase={bPuntosAMenos.base} boosteado={bPuntosAMenos.boosteado} locked={bPuntosAMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.a} ${lineaAClamp}.5`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.a} ${lineaAClamp}.5`, "Menos", puntosAVivo.cuotaMenos, `${partido.a} menos de ${lineaAClamp}.5`)} />}
                     </div>
                   )}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <input type="range" min={rangoB.min} max={rangoB.max} step={1} value={lineaBClamp}
+                    <input type="range" min={0} max={21} step={1} value={lineaBClamp}
                       onChange={(e) => setLineaB(Number(e.target.value))}
                       style={{ accentColor: "#FF5A1F" }} className="flex-1" />
-                    <span className="text-sm font-bold c-text-1 w-24 text-right">{partido.b}: {lineaBClamp}</span>
+                    <span className="text-sm font-bold c-text-1 w-24 text-right">{partido.b}: {lineaBClamp}.5</span>
                   </div>
                   {puntosBVivo && (variacionB.mostrarMas || variacionB.mostrarMenos) && (
                     <div className="flex gap-2 mt-1">
-                      {variacionB.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta="Más de" sub={`${lineaBClamp}`} valor={bPuntosBMas.valor} valorBase={bPuntosBMas.base} boosteado={bPuntosBMas.boosteado} locked={bPuntosBMas.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Más", puntosBVivo.cuotaMas, `${partido.b} más de ${lineaBClamp}`)} />}
-                      {variacionB.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta="Menos de" sub={`${lineaBClamp}`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} locked={bPuntosBMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}`)} />}
+                      {variacionB.mostrarMas && <BotonCuota isEditing={isEditing} etiqueta="Más de" sub={`${lineaBClamp}.5`} valor={bPuntosBMas.valor} valorBase={bPuntosBMas.base} boosteado={bPuntosBMas.boosteado} locked={bPuntosBMas.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}.5`, "Más")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}.5`, "Más", puntosBVivo.cuotaMas, `${partido.b} más de ${lineaBClamp}.5`)} />}
+                      {variacionB.mostrarMenos && <BotonCuota isEditing={isEditing} etiqueta="Menos de" sub={`${lineaBClamp}.5`} valor={bPuntosBMenos.valor} valorBase={bPuntosBMenos.base} boosteado={bPuntosBMenos.boosteado} locked={bPuntosBMenos.locked} activo={!!estaEnSlip(`Puntos ${partido.b} ${lineaBClamp}.5`, "Menos")} onClick={() => manejarClicCuota(`Puntos ${partido.b} ${lineaBClamp}.5`, "Menos", puntosBVivo.cuotaMenos, `${partido.b} menos de ${lineaBClamp}.5`)} />}
                     </div>
                   )}
                 </div>
