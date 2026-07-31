@@ -1232,6 +1232,8 @@ export default function CasaApuestasPingpong() {
   const [error, setError] = useState("");
   const [celebracion, setCelebracion] = useState(null);
   const [confirmBorrar, setConfirmBorrar] = useState(false);
+  const [confirmRecargarHistorial, setConfirmRecargarHistorial] = useState(false);
+  const [previsualizacion, setPrevisualizacion] = useState(null);
   const [modoEspectador, setModoEspectador] = useState(true);
   const [pidiendoPassword, setPidiendoPassword] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -1483,6 +1485,28 @@ export default function CasaApuestasPingpong() {
     } catch (e) {
       setError("No se pudo copiar automáticamente.");
     }
+  }
+
+  function revisarCuotas() {
+    setError("");
+    if (!selA || !selB || selA === selB) { setError("Elige dos jugadores distintos."); return; }
+    const auto = (selA === estado.gm || selB === estado.gm);
+    const nuevo = {
+      id: Date.now(), a: selA, b: selB, esGM: esGM && auto, apuestas: [],
+      hora: horaInput, ladoA: ladoAInput, ladoB: ladoBAuto, solLado: solLadoInput, viento: vientoInput,
+      mercadosCustom: []
+    };
+    const ctx = { ladoA: nuevo.ladoA, ladoB: nuevo.ladoB, solLado: nuevo.solLado, viento: nuevo.viento, esGM: nuevo.esGM };
+    const pPunto = calcularProbabilidadPuntoPura(estado.historial || [], nuevo.a, nuevo.b, ctx);
+    const mercadosPreview = calcularMercadosDesdeProbabilidad(pPunto, estado.margen, nuevo.a, nuevo.b);
+    setPrevisualizacion({ nuevo, mercados: mercadosPreview });
+  }
+
+  function publicarPartido() {
+    if (!previsualizacion) return;
+    persistir({ ...estado, partidoAbierto: previsualizacion.nuevo });
+    setPrevisualizacion(null);
+    setSelA(""); setSelB(""); setEsGM(false); setSolLadoInput(null); setVientoInput(false);
   }
 
   function crearPartido() {
@@ -1831,6 +1855,11 @@ export default function CasaApuestasPingpong() {
     setConfirmBorrar(false);
   }
 
+  async function recargarHistorialReal() {
+    await persistir(construirEstadoDesdeHistorialReal());
+    setConfirmRecargarHistorial(false);
+  }
+
   // --- DERIVACIÓN DE DATOS PARA LA VISTA ---
   let pA_punto = null, mercados = null, ctxPartido = null;
 
@@ -2044,6 +2073,11 @@ export default function CasaApuestasPingpong() {
               {modoEspectador ? <Eye size={16} /> : <EyeOff size={16} />}
             </button>
             {!modoEspectador && (
+              <button onClick={() => setConfirmRecargarHistorial(true)} title="Recargar historial real" className="c-text-2 hover:c-text-1 transition-colors">
+                <History size={16} />
+              </button>
+            )}
+            {!modoEspectador && (
               <button onClick={() => setConfirmBorrar(true)} title="Borrar todo" className="c-text-2 hover:c-text-1 transition-colors">
                 <RotateCcw size={16} />
               </button>
@@ -2142,9 +2176,35 @@ export default function CasaApuestasPingpong() {
                     Es partido por la Gran Maestría
                   </label>
                 )}
-                <button onClick={crearPartido} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
-                  <Plus size={16} /> Abrir mesa de apuestas
+                <button onClick={revisarCuotas} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
+                  <Plus size={16} /> Revisar cuotas antes de publicar
                 </button>
+              </div>
+            )}
+            {previsualizacion && (
+              <div className="mt-3 rounded-lg border c-bd-orange-50 c-bg-app p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold uppercase tracking-wide c-text-orange">Vista previa — todavía NO es pública</div>
+                </div>
+                <div className="text-sm c-text-1 font-semibold">{previsualizacion.nuevo.a} vs {previsualizacion.nuevo.b}</div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="rounded-lg c-bg-white border c-bd-1 p-2 text-center">
+                    <div className="c-text-2 text-xs">{previsualizacion.nuevo.a}</div>
+                    <div className="font-bold c-text-orange text-lg">{previsualizacion.mercados.ganador.A.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-lg c-bg-white border c-bd-1 p-2 text-center">
+                    <div className="c-text-2 text-xs">{previsualizacion.nuevo.b}</div>
+                    <div className="font-bold c-text-orange text-lg">{previsualizacion.mercados.ganador.B.toFixed(2)}</div>
+                  </div>
+                </div>
+                <div className="text-xs c-text-2 space-y-1">
+                  <div>Más/menos {previsualizacion.mercados.puntosA.linea} puntos ({previsualizacion.nuevo.a}): {previsualizacion.mercados.puntosA.cuotaMas.toFixed(2)} / {previsualizacion.mercados.puntosA.cuotaMenos.toFixed(2)}</div>
+                  <div>Más/menos {previsualizacion.mercados.puntosB.linea} puntos ({previsualizacion.nuevo.b}): {previsualizacion.mercados.puntosB.cuotaMas.toFixed(2)} / {previsualizacion.mercados.puntosB.cuotaMenos.toFixed(2)}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button onClick={() => setPrevisualizacion(null)} className="rounded-lg border c-bd-1 c-text-2 font-semibold py-2 text-sm">⬅ Ajustar</button>
+                  <button onClick={publicarPartido} className="rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm">✅ Publicar para todos</button>
+                </div>
               </div>
             )}
           </Panel>
@@ -2706,8 +2766,10 @@ export default function CasaApuestasPingpong() {
                     <button onClick={() => quitarDeSlip(s.id)} className="c-text-red2"><X size={16} /></button>
                   </div>
                 ))}
-                <input value={bettorSlip} onChange={(e) => setBettorSlip(e.target.value)} placeholder="¿Quién apuesta?" list="bettors-list" className="w-full rounded-lg border c-bd-1 c-bg-white p-2 text-sm c-text-1 shadow-inner" />
-                <datalist id="bettors-list">{Object.keys(estado.bettors).map((n) => <option key={n} value={n} />)}</datalist>
+                <select value={bettorSlip} onChange={(e) => setBettorSlip(e.target.value)} style={{ colorScheme: "light" }} className="w-full rounded-lg border c-bd-1 c-bg-white p-2 text-sm c-text-1 shadow-inner">
+                  <option value="">¿Quién apuesta?</option>
+                  {nombresJugadores.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
 
                 {modoSlip === "combinada" && slip.length >= 2 ? (
                   <>
@@ -2761,6 +2823,17 @@ export default function CasaApuestasPingpong() {
           onCancelar={() => setConfirmBorrar(false)}
           onConfirmar={borrarTodo}
           textoConfirmar="Borrar todo"
+          peligro
+        />
+      )}
+
+      {confirmRecargarHistorial && (
+        <ModalConfirmar
+          titulo="¿Recargar el historial real?"
+          mensaje="Esto sustituye jugadores, ratings, fichas e historial actuales por los 103 partidos reales guardados en la app. Cualquier partido o apuesta en curso se perderá. No se puede deshacer."
+          onCancelar={() => setConfirmRecargarHistorial(false)}
+          onConfirmar={recargarHistorialReal}
+          textoConfirmar="Recargar historial"
           peligro
         />
       )}
