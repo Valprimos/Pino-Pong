@@ -670,9 +670,9 @@ const HISTORIAL_REAL = [
   { teamA: ["Javier"], teamB: ["Nicolás"], pa: 21, pb: 17, ladoA: "Columpios", ladoB: "Canasta", hora: "19:30" },
   { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 9, ladoA: "Columpios", ladoB: "Canasta", hora: "19:40" },
   { teamA: ["Javier"], teamB: ["Juan"], pa: 21, pb: 12, ladoA: "Columpios", ladoB: "Canasta", hora: "19:50" },
-  { teamA: ["Juan y Javier"], teamB: ["Álvaro y Nicolás"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:00" },
-  { teamA: ["Juan y Javier"], teamB: ["Álvaro y Nicolás"], pa: 18, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:10" },
-  { teamA: ["Daniel y Javier"], teamB: ["Álvaro y Nicolás"], pa: 17, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:20" },
+  { teamA: ["Juan", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:00" },
+  { teamA: ["Juan", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 18, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:10" },
+  { teamA: ["Daniel", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 17, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:20" },
   { teamA: ["Alberto"], teamB: ["Álvaro"], pa: 19, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:00" },
   { teamA: ["Pedro"], teamB: ["Álvaro"], pa: 18, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:10" },
   { teamA: ["Juan"], teamB: ["Álvaro"], pa: 15, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:20" },
@@ -1459,7 +1459,7 @@ export default function CasaApuestasPingpong() {
   }
 
   function exportarHistorial() {
-    const csv = historialACSV(estado.historial);
+    const csv = historialACSV(estado.historial || []);
     try { descargarCSV(csv, "pinamax_historial.csv"); } catch (e) {}
     setCsvCopiado(false);
     setCsvVisible(csv);
@@ -1613,7 +1613,7 @@ export default function CasaApuestasPingpong() {
     if (hasLocked) { setSlipError("Una de las cuotas de tu cesta acaba de ser bloqueada por la casa. Quítala para continuar."); return; }
 
     const saldoActual = estado.bettors[nombre] ?? 500;
-    const rachaApostante = calcularRachaApuestas(estado.historial, nombre);
+    const rachaApostante = calcularRachaApuestas(estado.historial || [], nombre);
     const bonus = bonusPorRachaApostante(rachaApostante);
 
     if (modoSlip === "combinada" && slip.length >= 2) {
@@ -1765,7 +1765,7 @@ export default function CasaApuestasPingpong() {
       fecha: new Date().toISOString(),
     };
     const coronacion = !!(gm && gm !== estado.gm);
-    const rachaRota = calcularRacha(estado.historial, perdedor) >= 3;
+    const rachaRota = calcularRacha(estado.historial || [], perdedor) >= 3;
     partidoCerrado.titular = generarTitular(partidoCerrado, coronacion, rachaRota);
 
     if (gm && gm !== estado.gm) setCelebracion({ nombre: gm, tipo: "gm" });
@@ -1774,22 +1774,22 @@ export default function CasaApuestasPingpong() {
       ...estado,
       jugadores: { ...estado.jugadores, [partido.a]: nuevoA, [partido.b]: nuevoB },
       gm, pendiente, bettors: nuevosBettors, partidoAbierto: null,
-      historial: [partidoCerrado, ...estado.historial],
+      historial: [partidoCerrado, ...(estado.historial || [])],
     });
     setMarcador({ a: "", b: "" });
     setResolviendoCustoms(null);
   }
 
   function eliminarPartidoHistorial(idPartido) {
-    const partidoABorrar = estado.historial.find(p => p.id === idPartido);
+    const partidoABorrar = (estado.historial || []).find(p => p.id === idPartido);
     if (!partidoABorrar) return;
 
     if (window.confirm("¿Seguro que quieres borrar este partido del historial? Se devolverán las fichas y se restaurará el ELO.")) {
-      const nuevoHistorial = estado.historial.filter((p) => p.id !== idPartido);
+      const nuevoHistorial = (estado.historial || []).filter((p) => p.id !== idPartido);
       let nuevosJugadores = { ...estado.jugadores };
       let nuevosBettors = { ...estado.bettors };
 
-      if (estado.historial[0].id === idPartido) {
+      if ((estado.historial || [])[0]?.id === idPartido) {
         if (partidoABorrar.ratingsAntes) {
           Object.entries(partidoABorrar.ratingsAntes).forEach(([jugador, eloAnterior]) => {
             nuevosJugadores[jugador] = eloAnterior;
@@ -1843,8 +1843,8 @@ export default function CasaApuestasPingpong() {
 
   const bGanadorA = ganadorConDinero ? conBoost("Ganador", partido.a, ganadorConDinero.A) : null;
   const bGanadorB = ganadorConDinero ? conBoost("Ganador", partido.b, ganadorConDinero.B) : null;
-  const rachaA = partido ? calcularRacha(estado.historial, partido.a) : 0;
-  const rachaB = partido ? calcularRacha(estado.historial, partido.b) : 0;
+  const rachaA = partido ? calcularRacha(estado.historial || [], partido.a) : 0;
+  const rachaB = partido ? calcularRacha(estado.historial || [], partido.b) : 0;
   
   // Limitar handicap al realismo de la probabilidad
   let maxHandicap = 3;
@@ -1917,9 +1917,9 @@ export default function CasaApuestasPingpong() {
   const rankingBettors = Object.entries(estado.bettors).sort((a, b) => b[1] - a[1]);
   const podio = rankingBettors.slice(0, 3);
   const resto = rankingBettors.slice(3);
-  const estadisticasApostantes = calcularEstadisticasApostantes(estado.historial, estado.bettors);
-  const rankingEstilo = calcularRankingEstilo(estado.historial);
-  const statsCampos = calcularEstadisticasGlobales(estado.historial);
+  const estadisticasApostantes = calcularEstadisticasApostantes(estado.historial || [], estado.bettors || {});
+  const rankingEstilo = calcularRankingEstilo(estado.historial || []);
+  const statsCampos = calcularEstadisticasGlobales(estado.historial || []);
 
   const TABS = [
     { id: "partido", label: "Apuestas", icon: Swords },
@@ -2071,7 +2071,7 @@ export default function CasaApuestasPingpong() {
         )}
         {tab === "partido" && !partido && !modoEspectador && (
           <Panel icon={Swords} titulo="Montar un partido nuevo">
-            {nombresJugadores.length === 0 && estado.historial.length === 0 && (
+            {nombresJugadores.length === 0 && (estado.historial || []).length === 0 && (
               <button onClick={() => persistir(construirEstadoDesdeHistorialReal())} className="w-full rounded-lg border border-dashed c-bd-orange-50 c-text-orange text-sm font-semibold py-2.5 mb-1">
                 📋 Cargar los partidos ya jugados
               </button>
@@ -2400,7 +2400,7 @@ export default function CasaApuestasPingpong() {
               ) : (
                 <div className="space-y-1">
                   {nombresJugadores.slice().sort((a, b) => estado.jugadores[b] - estado.jugadores[a]).map((n, i) => {
-                    const racha = calcularRacha(estado.historial, n);
+                    const racha = calcularRacha(estado.historial || [], n);
                     const stats = statsCampos.porJugador[n] || { cV:0, cD:0, kV:0, kD:0 };
                     const totalMatches = stats.cV + stats.cD + stats.kV + stats.kD;
                     
@@ -2428,7 +2428,7 @@ export default function CasaApuestasPingpong() {
               <div className="grid grid-cols-2 gap-3 mb-4">
                  <div className="c-bg-app p-3 rounded-lg border c-bd-2 text-center shadow-sm">
                     <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Partidos Jugados</div>
-                    <div className="font-bold text-2xl c-text-1">{estado.historial.length}</div>
+                    <div className="font-bold text-2xl c-text-1">{(estado.historial || []).length}</div>
                  </div>
                  <div className="c-bg-app p-3 rounded-lg border c-bd-2 text-center shadow-sm">
                     <div className="text-[10px] font-bold uppercase tracking-wider c-text-2 mb-1">Fichas en Circuito</div>
@@ -2438,7 +2438,7 @@ export default function CasaApuestasPingpong() {
                  </div>
               </div>
 
-              {estado.historial.length > 0 && (
+              {(estado.historial || []).length > 0 && (
                 <div className="space-y-4">
                   {/* RESUMEN GLOBAL CAMPOS */}
                   <div className="bg-white border c-bd-2 rounded-xl p-3 shadow-sm border-l-4" style={{borderLeftColor: '#3B82F6'}}>
@@ -2575,18 +2575,18 @@ export default function CasaApuestasPingpong() {
 
         {tab === "historial" && (
           <div className="space-y-3">
-            {estado.historial.length > 0 && (
+            {(estado.historial || []).length > 0 && (
               <button onClick={exportarHistorial} className="w-full rounded-lg border border-dashed c-bd-orange c-text-orange text-sm font-semibold py-2.5 bg-white">
                 ⬇️ Exportar historial a CSV
               </button>
             )}
             
-            {estado.historial.length === 0 ? (
+            {(estado.historial || []).length === 0 ? (
               <Panel icon={History} titulo="Historial">
                 <p className="text-sm c-text-2">Aún no se ha cerrado ningún partido.</p>
               </Panel>
             ) : (
-              estado.historial.map((p) => {
+              (estado.historial || []).map((p) => {
                 const fechaObj = new Date(p.fecha);
                 const fechaStr = fechaObj.toLocaleDateString("es-ES", { day: "2-digit", month: "short" });
                 const horaStr = p.hora || fechaObj.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
@@ -2757,7 +2757,7 @@ export default function CasaApuestasPingpong() {
       {perfilAbierto && (
         <ModalPerfil
           nombre={perfilAbierto}
-          perfil={construirPerfilJugador(estado.historial, perfilAbierto)}
+          perfil={construirPerfilJugador(estado.historial || [], perfilAbierto)}
           rating={ratingDe(perfilAbierto)}
           statsAvanzadas={statsCampos.porJugador[perfilAbierto]}
           onCerrar={() => setPerfilAbierto(null)}
