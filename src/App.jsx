@@ -1262,6 +1262,17 @@ export default function CasaApuestasPingpong() {
   useEffect(() => {
     const unsubscribe = suscribirEstado((remoto) => {
       const estadoMerged = remoto ? { ...ESTADO_DEFECTO, ...remoto } : ESTADO_DEFECTO;
+      // Firebase borra los campos vacíos ({} o []) en CUALQUIER nivel al guardar,
+      // así que un partido recién abierto (apuestas/mercadosCustom vacíos) puede
+      // volver sin esos campos. Los rellenamos para que nada intente iterarlos.
+      if (estadoMerged.partidoAbierto) {
+        estadoMerged.partidoAbierto = {
+          apuestas: [],
+          mercadosCustom: [],
+          boosts: {},
+          ...estadoMerged.partidoAbierto,
+        };
+      }
       // Siempre aplicamos lo que llega de Firebase (es la fuente de verdad).
       // Guardamos su "huella" para que el efecto de guardado de abajo no
       // vuelva a reenviarlo si no ha cambiado nada realmente.
