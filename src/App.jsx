@@ -670,9 +670,6 @@ const HISTORIAL_REAL = [
   { teamA: ["Javier"], teamB: ["Nicolás"], pa: 21, pb: 17, ladoA: "Columpios", ladoB: "Canasta", hora: "19:30" },
   { teamA: ["Javier"], teamB: ["Álvaro"], pa: 21, pb: 9, ladoA: "Columpios", ladoB: "Canasta", hora: "19:40" },
   { teamA: ["Javier"], teamB: ["Juan"], pa: 21, pb: 12, ladoA: "Columpios", ladoB: "Canasta", hora: "19:50" },
-  { teamA: ["Juan", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 21, pb: 19, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:00" },
-  { teamA: ["Juan", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 18, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:10" },
-  { teamA: ["Daniel", "Javier"], teamB: ["Álvaro", "Nicolás"], pa: 17, pb: 21, ladoA: "Columpios", ladoB: "Canasta", viento: true, hora: "20:20" },
   { teamA: ["Alberto"], teamB: ["Álvaro"], pa: 19, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:00" },
   { teamA: ["Pedro"], teamB: ["Álvaro"], pa: 18, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:10" },
   { teamA: ["Juan"], teamB: ["Álvaro"], pa: 15, pb: 21, ladoA: "Canasta", ladoB: "Columpios", viento: true, hora: "14:20" },
@@ -1231,7 +1228,6 @@ export default function CasaApuestasPingpong() {
   const [marcador, setMarcador] = useState({ a: "", b: "" });
   const [error, setError] = useState("");
   const [celebracion, setCelebracion] = useState(null);
-  const [confirmBorrar, setConfirmBorrar] = useState(false);
   const [confirmRecargarHistorial, setConfirmRecargarHistorial] = useState(false);
   const [previsualizacion, setPrevisualizacion] = useState(null);
   const [modoEspectador, setModoEspectador] = useState(true);
@@ -1363,7 +1359,8 @@ export default function CasaApuestasPingpong() {
   }
 
   const nombresJugadores = Object.keys(estado.jugadores);
-  const partido = estado.partidoAbierto;
+  const enPrevisualizacion = !!previsualizacion;
+  const partido = previsualizacion ? previsualizacion.nuevo : estado.partidoAbierto;
   const ratingDe = (n) => estado.jugadores[n] ?? RATING_INICIAL;
   const ladoBAuto = ladoAInput === "Canasta" ? "Columpios" : "Canasta";
 
@@ -1494,12 +1491,9 @@ export default function CasaApuestasPingpong() {
     const nuevo = {
       id: Date.now(), a: selA, b: selB, esGM: esGM && auto, apuestas: [],
       hora: horaInput, ladoA: ladoAInput, ladoB: ladoBAuto, solLado: solLadoInput, viento: vientoInput,
-      mercadosCustom: []
+      mercadosCustom: [], boosts: {}
     };
-    const ctx = { ladoA: nuevo.ladoA, ladoB: nuevo.ladoB, solLado: nuevo.solLado, viento: nuevo.viento, esGM: nuevo.esGM };
-    const pPunto = calcularProbabilidadPuntoPura(estado.historial || [], nuevo.a, nuevo.b, ctx);
-    const mercadosPreview = calcularMercadosDesdeProbabilidad(pPunto, estado.margen, nuevo.a, nuevo.b);
-    setPrevisualizacion({ nuevo, mercados: mercadosPreview });
+    setPrevisualizacion({ nuevo });
   }
 
   function publicarPartido() {
@@ -1509,22 +1503,27 @@ export default function CasaApuestasPingpong() {
     setSelA(""); setSelB(""); setEsGM(false); setSolLadoInput(null); setVientoInput(false);
   }
 
-  function crearPartido() {
-    setError("");
-    if (!selA || !selB || selA === selB) { setError("Elige dos jugadores distintos."); return; }
-    const auto = (selA === estado.gm || selB === estado.gm);
-    const nuevo = {
-      id: Date.now(), a: selA, b: selB, esGM: esGM && auto, apuestas: [],
-      hora: horaInput, ladoA: ladoAInput, ladoB: ladoBAuto, solLado: solLadoInput, viento: vientoInput,
-      mercadosCustom: []
-    };
-    persistir({ ...estado, partidoAbierto: nuevo });
-    
-    // Reset inputs
+  function descartarPrevisualizacion() {
+    setPrevisualizacion(null);
     setSelA(""); setSelB(""); setEsGM(false); setSolLadoInput(null); setVientoInput(false);
   }
 
+  // Escribe cambios en el partido actual: si estamos previsualizando (aún sin
+  // publicar), el cambio se queda solo en local; si ya está publicado, se
+  // guarda en Firebase para todo el grupo.
+  function actualizarPartidoAbierto(actualizarFn) {
+    if (enPrevisualizacion) {
+      setPrevisualizacion((prev) => (prev ? { ...prev, nuevo: actualizarFn(prev.nuevo) } : prev));
+    } else {
+      persistir((prev) => (prev.partidoAbierto ? { ...prev, partidoAbierto: actualizarFn(prev.partidoAbierto) } : prev));
+    }
+  }
+
   function cancelarPartido() {
+    if (enPrevisualizacion) {
+      descartarPrevisualizacion();
+      return;
+    }
     if (partido && partido.apuestas && partido.apuestas.length > 0) {
       let nuevosBettors = { ...estado.bettors };
       partido.apuestas.forEach(ap => {
@@ -1556,18 +1555,15 @@ export default function CasaApuestasPingpong() {
       setError("La cuota debe ser 1.05 o más.");
       return;
     }
-    
-    persistir(prev => {
-      if (!prev.partidoAbierto) return prev;
-      const nuevosBoosts = { ...(prev.partidoAbierto.boosts || {}) };
-      const clave = claveBoost(mercado, seleccion);
 
+    actualizarPartidoAbierto((p) => {
+      const nuevosBoosts = { ...(p.boosts || {}) };
+      const clave = claveBoost(mercado, seleccion);
       if (val) nuevosBoosts[clave] = Number(val.toFixed(2));
       else delete nuevosBoosts[clave];
-
-      return { ...prev, partidoAbierto: { ...prev.partidoAbierto, boosts: nuevosBoosts } };
+      return { ...p, boosts: nuevosBoosts };
     });
-    
+
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
     setError("");
@@ -1575,11 +1571,10 @@ export default function CasaApuestasPingpong() {
 
   function bloquearCuota() {
     const { mercado, seleccion } = editarCuotaObjetivo;
-    persistir(prev => {
-      if (!prev.partidoAbierto) return prev;
-      const nuevosBoosts = { ...(prev.partidoAbierto.boosts || {}) };
+    actualizarPartidoAbierto((p) => {
+      const nuevosBoosts = { ...(p.boosts || {}) };
       nuevosBoosts[claveBoost(mercado, seleccion)] = "LOCKED";
-      return { ...prev, partidoAbierto: { ...prev.partidoAbierto, boosts: nuevosBoosts } };
+      return { ...p, boosts: nuevosBoosts };
     });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
@@ -1587,11 +1582,10 @@ export default function CasaApuestasPingpong() {
 
   function quitarCuotaEditada() {
     if (!editarCuotaObjetivo) return;
-    persistir(prev => {
-      if (!prev.partidoAbierto) return prev;
-      const nuevosBoosts = { ...(prev.partidoAbierto.boosts || {}) };
+    actualizarPartidoAbierto((p) => {
+      const nuevosBoosts = { ...(p.boosts || {}) };
       delete nuevosBoosts[claveBoost(editarCuotaObjetivo.mercado, editarCuotaObjetivo.seleccion)];
-      return { ...prev, partidoAbierto: { ...prev.partidoAbierto, boosts: nuevosBoosts } };
+      return { ...p, boosts: nuevosBoosts };
     });
     setEditarCuotaObjetivo(null);
     setEditarCuotaInput("");
@@ -1705,10 +1699,8 @@ export default function CasaApuestasPingpong() {
     }
 
     setError("");
-    const listaActual = partido.mercadosCustom || [];
     const nuevoCustom = { id: Date.now(), mercado: mNombre, seleccion: mSel, cuota: Number(mCuotaVal.toFixed(2)) };
-    const partidoActualizado = { ...partido, mercadosCustom: [...listaActual, nuevoCustom] };
-    persistir({ ...estado, partidoAbierto: partidoActualizado });
+    actualizarPartidoAbierto((p) => ({ ...p, mercadosCustom: [...(p.mercadosCustom || []), nuevoCustom] }));
     setNombreMercadoCustom("");
     setSeleccionMercadoCustom("");
     setCuotaMercadoCustom("");
@@ -1716,17 +1708,7 @@ export default function CasaApuestasPingpong() {
   }
 
   function eliminarMercadoCustom(idCustom) {
-    persistir(prev => {
-      if (!prev.partidoAbierto) return prev;
-      const listaActual = prev.partidoAbierto.mercadosCustom || [];
-      return { 
-        ...prev, 
-        partidoAbierto: { 
-          ...prev.partidoAbierto, 
-          mercadosCustom: listaActual.filter(item => item.id !== idCustom) 
-        } 
-      };
-    });
+    actualizarPartidoAbierto((p) => ({ ...p, mercadosCustom: (p.mercadosCustom || []).filter(item => item.id !== idCustom) }));
   }
 
   function toggleVeto(nombre) {
@@ -1848,11 +1830,6 @@ export default function CasaApuestasPingpong() {
         bettors: nuevosBettors
       });
     }
-  }
-
-  async function borrarTodo() {
-    await persistir(ESTADO_DEFECTO);
-    setConfirmBorrar(false);
   }
 
   async function recargarHistorialReal() {
@@ -2077,11 +2054,6 @@ export default function CasaApuestasPingpong() {
                 <History size={16} />
               </button>
             )}
-            {!modoEspectador && (
-              <button onClick={() => setConfirmBorrar(true)} title="Borrar todo" className="c-text-2 hover:c-text-1 transition-colors">
-                <RotateCcw size={16} />
-              </button>
-            )}
           </div>
         </div>
         <div className="c-red-net h-[3px] w-full mt-3 rounded-full opacity-70" />
@@ -2179,32 +2151,6 @@ export default function CasaApuestasPingpong() {
                 <button onClick={revisarCuotas} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
                   <Plus size={16} /> Revisar cuotas antes de publicar
                 </button>
-              </div>
-            )}
-            {previsualizacion && (
-              <div className="mt-3 rounded-lg border c-bd-orange-50 c-bg-app p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold uppercase tracking-wide c-text-orange">Vista previa — todavía NO es pública</div>
-                </div>
-                <div className="text-sm c-text-1 font-semibold">{previsualizacion.nuevo.a} vs {previsualizacion.nuevo.b}</div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div className="rounded-lg c-bg-white border c-bd-1 p-2 text-center">
-                    <div className="c-text-2 text-xs">{previsualizacion.nuevo.a}</div>
-                    <div className="font-bold c-text-orange text-lg">{previsualizacion.mercados.ganador.A.toFixed(2)}</div>
-                  </div>
-                  <div className="rounded-lg c-bg-white border c-bd-1 p-2 text-center">
-                    <div className="c-text-2 text-xs">{previsualizacion.nuevo.b}</div>
-                    <div className="font-bold c-text-orange text-lg">{previsualizacion.mercados.ganador.B.toFixed(2)}</div>
-                  </div>
-                </div>
-                <div className="text-xs c-text-2 space-y-1">
-                  <div>Más/menos {previsualizacion.mercados.puntosA.linea} puntos ({previsualizacion.nuevo.a}): {previsualizacion.mercados.puntosA.cuotaMas.toFixed(2)} / {previsualizacion.mercados.puntosA.cuotaMenos.toFixed(2)}</div>
-                  <div>Más/menos {previsualizacion.mercados.puntosB.linea} puntos ({previsualizacion.nuevo.b}): {previsualizacion.mercados.puntosB.cuotaMas.toFixed(2)} / {previsualizacion.mercados.puntosB.cuotaMenos.toFixed(2)}</div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button onClick={() => setPrevisualizacion(null)} className="rounded-lg border c-bd-1 c-text-2 font-semibold py-2 text-sm">⬅ Ajustar</button>
-                  <button onClick={publicarPartido} className="rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm">✅ Publicar para todos</button>
-                </div>
               </div>
             )}
           </Panel>
@@ -2685,9 +2631,9 @@ export default function CasaApuestasPingpong() {
                         <span key={n}>{i > 0 && ", "}{n} {antes.toFixed(0)}→{p.ratingsDespues[n].toFixed(0)}</span>
                       ))}
                     </div>
-                    {p.apuestas.length > 0 && (
+                    {(p.apuestas || []).length > 0 && (
                       <div className="pt-1 space-y-0.5">
-                        {p.apuestas.map((ap) => (
+                        {(p.apuestas || []).map((ap) => (
                           <div key={ap.id} onClick={() => setDetalleApuestaVisible(ap)} className={`text-xs flex justify-between p-1.5 -mx-1.5 rounded-md cursor-pointer hover:bg-black/5 active:scale-[0.98] transition-all ${ap.estado === "ganada" ? "c-text-green" : "c-text-red2"}`}>
                             <span className="truncate pr-2 font-medium">{ap.bettor} · {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
                             <span className="font-bold shrink-0">{ap.estado === "ganada" ? `+${(ap.stake * ap.cuota).toFixed(2)}` : `-${ap.stake.toFixed(2)}`}</span>
@@ -2817,20 +2763,10 @@ export default function CasaApuestasPingpong() {
       <ModalDetalleApuesta apuesta={detalleApuestaVisible} onCerrar={() => setDetalleApuestaVisible(null)} />
 
       {confirmBorrar && (
-        <ModalConfirmar
-          titulo="¿Borrar todos los datos?"
-          mensaje="Se perderán jugadores, apuestas, fichas e historial. No se puede deshacer."
-          onCancelar={() => setConfirmBorrar(false)}
-          onConfirmar={borrarTodo}
-          textoConfirmar="Borrar todo"
-          peligro
-        />
-      )}
-
       {confirmRecargarHistorial && (
         <ModalConfirmar
           titulo="¿Recargar el historial real?"
-          mensaje="Esto sustituye jugadores, ratings, fichas e historial actuales por los 103 partidos reales guardados en la app. Cualquier partido o apuesta en curso se perderá. No se puede deshacer."
+          mensaje="Esto sustituye jugadores, ratings, fichas e historial actuales por los 100 partidos reales guardados en la app (dobles excluidos). Cualquier partido o apuesta en curso se perderá. No se puede deshacer."
           onCancelar={() => setConfirmRecargarHistorial(false)}
           onConfirmar={recargarHistorialReal}
           textoConfirmar="Recargar historial"
