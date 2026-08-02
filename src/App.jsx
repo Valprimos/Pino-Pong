@@ -266,7 +266,21 @@ function sumaStakeGanador(apuestas, nombre) {
 function claveBoost(mercado, seleccion) {
   return `${mercado}||${seleccion}`;
 }
+// Agrupa mercados dinámicos (con líneas o nombres variables) en categorías
+// fijas, para poder bloquear "todo Hándicap" o "todo Puntos" de una vez sin
+// tener que bloquear cuota por cuota.
+function grupoDeMercado(mercado) {
+  if (mercado === "Ganador") return "Ganador";
+  if (mercado === "Cómo termina") return "Cómo termina";
+  if (mercado.startsWith("Puntos Exactos") || mercado === "Resultado Exacto Partido") return "Puntos exactos";
+  if (mercado.startsWith("Hándicap")) return "Hándicap";
+  if (mercado.startsWith("Puntos ")) return "Más/menos puntos";
+  return mercado; // mercados personalizados (supercuotas): cada uno es su propio grupo
+}
+const GRUPOS_MERCADO_BASE = ["Ganador", "Cómo termina", "Puntos exactos", "Hándicap", "Más/menos puntos"];
+
 function boostDe(partido, mercado, seleccion) {
+  if (partido?.mercadosBloqueados?.includes(grupoDeMercado(mercado))) return "LOCKED";
   const v = partido?.boosts?.[claveBoost(mercado, seleccion)];
   if (v === "LOCKED") return "LOCKED";
   return (typeof v === "number" && v >= 1.05) ? v : null;
@@ -453,6 +467,35 @@ function actualizarTitulo(gm, pendiente, esGM, ganador) {
   if (ganador === gm) return { gm, pendiente: null };
   if (pendiente === ganador) return { gm: ganador, pendiente: null };
   return { gm, pendiente: ganador };
+}
+
+// Vuelve a jugar todo el historial (asume individuales, sin dobles) desde
+// cero para recalcular ratings, título y ganador de cada partido de forma
+// consistente. Se usa al editar o borrar un partido pasado, porque cambiar
+// uno cualquiera puede afectar a los ratings de todos los que vinieron
+// después. `historialNuevoAViejo` y el resultado están en el mismo orden
+// (más reciente primero) que se usa para guardar en el estado.
+function recalcularCadenaDesdeHistorial(historialNuevoAViejo) {
+  const cronologico = [...historialNuevoAViejo].reverse();
+  let jugadores = {};
+  let gm = null, pendiente = null;
+  const recalculado = cronologico.map((p) => {
+    const nombreA = p.teamA[0], nombreB = p.teamB[0];
+    if (jugadores[nombreA] === undefined) jugadores[nombreA] = RATING_INICIAL;
+    if (jugadores[nombreB] === undefined) jugadores[nombreB] = RATING_INICIAL;
+    const ratingsAntes = { [nombreA]: jugadores[nombreA], [nombreB]: jugadores[nombreB] };
+    const ganoA = p.pa > p.pb;
+    const movMulti = calcularMovMulti(p.pa, p.pb);
+    const pEloBase = expectedScore(jugadores[nombreA], jugadores[nombreB]);
+    const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
+    jugadores[nombreA] += K_FACTOR * movMulti * (sA - pEloBase);
+    jugadores[nombreB] += K_FACTOR * movMulti * (sB - (1 - pEloBase));
+    const ganador = ganoA ? nombreA : nombreB;
+    const resultado = actualizarTitulo(gm, pendiente, p.esGM, ganador);
+    gm = resultado.gm; pendiente = resultado.pendiente;
+    return { ...p, ganador, ratingsAntes, ratingsDespues: { [nombreA]: jugadores[nombreA], [nombreB]: jugadores[nombreB] } };
+  });
+  return { jugadores, gm, pendiente, historial: recalculado.reverse() };
 }
 
 function actualizarEloEquipo(ratingsA, ladoA, ratingsB, ladoB, ganoA, pa, pb) {
@@ -1371,6 +1414,7 @@ export default function CasaApuestasPingpong() {
   const prevSlipLen = useRef(0);
   const csvInputRef = useRef(null);
   const [csvImportMsg, setCsvImportMsg] = useState(null); // { tipo: "ok"|"error", texto }
+  const [editandoPartido, setEditandoPartido] = useState(null);
   const ultimoSincronizado = useRef(null);
 
   useEffect(() => {
@@ -1635,6 +1679,18 @@ export default function CasaApuestasPingpong() {
     }
   }
 
+  function toggleMercadoBloqueado(grupo) {
+    actualizarPartidoAbierto((p) => {
+      const actuales = p.mercadosBloqueados || [];
+      const yaBloqueado = actuales.includes(grupo);
+      return { ...p, mercadosBloqueados: yaBloqueado ? actuales.filter((g) => g !== grupo) : [...actuales, grupo] };
+    });
+  }
+
+  function toggleApuestasCerradas() {
+    actualizarPartidoAbierto((p) => ({ ...p, apuestasCerradas: !p.apuestasCerradas }));
+  }
+
   function cancelarPartido() {
     if (enPrevisualizacion) {
       descartarPrevisualizacion();
@@ -1712,6 +1768,7 @@ export default function CasaApuestasPingpong() {
       abrirEditorCuota(mercado, seleccion, valorBase, etiqueta);
       return;
     }
+    if (partido?.apuestasCerradas) return;
     const status = boostDe(partido, mercado, seleccion);
     if (status === "LOCKED") return;
     const valorFinal = status ?? valorBase;
@@ -1751,6 +1808,7 @@ export default function CasaApuestasPingpong() {
   function confirmarSlip() {
     setSlipError("");
     if (enPrevisualizacion) { setSlipError("Este partido todavía es una vista previa. Publícalo antes de que se pueda apostar."); return; }
+    if (partido?.apuestasCerradas) { setSlipError("La casa ha cerrado las apuestas para este partido."); return; }
     const nombre = bettorSlip.trim();
     if (!nombre) { setSlipError("Escribe el nombre de quién hace la apuesta."); return; }
     if (estado.vetados?.includes(nombre)) { setSlipError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
@@ -1919,35 +1977,61 @@ export default function CasaApuestasPingpong() {
     const partidoABorrar = (estado.historial || []).find(p => p.id === idPartido);
     if (!partidoABorrar) return;
 
-    if (window.confirm("¿Seguro que quieres borrar este partido del historial? Se devolverán las fichas y se restaurará el ELO.")) {
+    if (window.confirm("¿Seguro que quieres borrar este partido del historial? Se devolverán las fichas de sus apuestas y se recalculará el ELO de todos los partidos posteriores.")) {
       const nuevoHistorial = (estado.historial || []).filter((p) => p.id !== idPartido);
-      let nuevosJugadores = { ...estado.jugadores };
       let nuevosBettors = { ...estado.bettors };
 
-      if ((estado.historial || [])[0]?.id === idPartido) {
-        if (partidoABorrar.ratingsAntes) {
-          Object.entries(partidoABorrar.ratingsAntes).forEach(([jugador, eloAnterior]) => {
-            nuevosJugadores[jugador] = eloAnterior;
-          });
+      (partidoABorrar.apuestas || []).forEach(ap => {
+        if (ap.estado === "ganada") {
+          nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) - (ap.stake * ap.cuota) + ap.stake).toFixed(2));
+        } else if (ap.estado === "perdida") {
+          nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
         }
-        if (partidoABorrar.apuestas) {
-          partidoABorrar.apuestas.forEach(ap => {
-             if (ap.estado === "ganada") {
-                nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) - (ap.stake * ap.cuota) + ap.stake).toFixed(2));
-             } else if (ap.estado === "perdida") {
-                nuevosBettors[ap.bettor] = Number(((nuevosBettors[ap.bettor] || 0) + ap.stake).toFixed(2));
-             }
-          });
-        }
-      }
+      });
+
+      const { jugadores, gm, pendiente, historial } = recalcularCadenaDesdeHistorial(nuevoHistorial);
 
       persistir({
         ...estado,
-        historial: nuevoHistorial,
-        jugadores: nuevosJugadores,
-        bettors: nuevosBettors
+        historial,
+        jugadores,
+        gm,
+        pendiente,
+        bettors: nuevosBettors,
       });
     }
+  }
+
+  function abrirEdicionPartido(p) {
+    setEditandoPartido({
+      id: p.id,
+      pa: String(p.pa), pb: String(p.pb),
+      ladoA: p.ladoA || "", ladoB: p.ladoB || "",
+      solLado: p.solLado || "", viento: !!p.viento,
+      esGM: !!p.esGM, hora: p.hora || "",
+    });
+  }
+
+  function guardarEdicionPartido() {
+    const ed = editandoPartido;
+    if (!ed) return;
+    const pa = Number(ed.pa), pb = Number(ed.pb);
+    if (isNaN(pa) || isNaN(pb) || pa === pb) { setError("Marcador no válido."); return; }
+
+    const nuevoHistorial = (estado.historial || []).map((p) => {
+      if (p.id !== ed.id) return p;
+      return {
+        ...p, pa, pb,
+        ladoA: ed.ladoA || null, ladoB: ed.ladoB || null,
+        solLado: ed.solLado || null, viento: !!ed.viento,
+        esGM: !!ed.esGM, hora: ed.hora || null,
+      };
+    });
+
+    const { jugadores, gm, pendiente, historial } = recalcularCadenaDesdeHistorial(nuevoHistorial);
+    persistir({ ...estado, historial, jugadores, gm, pendiente });
+    setError("");
+    setEditandoPartido(null);
   }
 
   async function recargarHistorialReal() {
@@ -2315,6 +2399,7 @@ export default function CasaApuestasPingpong() {
             <div className="rounded-xl c-grad-banner border c-bd-1 p-3">
               <div className="flex items-center justify-between">
                 <Chip tone="live">{enPrevisualizacion ? "🔒 borrador" : "● en juego"}</Chip>
+                {!enPrevisualizacion && partido.apuestasCerradas && <Chip tone="live">🔒 apuestas cerradas</Chip>}
                 {partido.esGM && <Chip tone="gold"><Crown size={10} className="inline -mt-0.5" /> título en juego</Chip>}
                 {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">{enPrevisualizacion ? "descartar borrador" : "cancelar partido"}</button>}
               </div>
@@ -2336,6 +2421,26 @@ export default function CasaApuestasPingpong() {
                   return `Si gana ${retador}, ${yaEsPendiente ? "se corona nuevo Gran Maestro 👑" : "pasa a ser Maestro (retador)"}.`;
                 })()}
               </div>
+            )}
+
+            {!modoEspectador && !enPrevisualizacion && (
+              <Panel icon={Ban} titulo="Control de la mesa">
+                <button onClick={toggleApuestasCerradas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.apuestasCerradas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-green-soft c-text-green-dark border c-bd-green-50"}`}>
+                  {partido.apuestasCerradas ? "🔒 Apuestas cerradas — pulsa para reabrir" : "🟢 Apuestas abiertas — pulsa para cerrar"}
+                </button>
+                <div className="text-[11px] c-text-2 mb-1.5">Bloquear mercado entero (sin ir cuota a cuota):</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[...GRUPOS_MERCADO_BASE, ...(partido.mercadosCustom || []).map((c) => c.mercado)].map((grupo) => {
+                    const bloqueado = (partido.mercadosBloqueados || []).includes(grupo);
+                    return (
+                      <button key={grupo} onClick={() => toggleMercadoBloqueado(grupo)}
+                        className={`text-[11px] font-semibold px-2 py-1 rounded-full border ${bloqueado ? "c-bg-red-soft c-text-red2 c-bd-red-50" : "c-bg-app c-text-2 c-bd-1"}`}>
+                        {bloqueado ? "🔒 " : ""}{grupo}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Panel>
             )}
 
             <Panel icon={Trophy} titulo="Ganador" badge={
@@ -2514,7 +2619,7 @@ export default function CasaApuestasPingpong() {
               <p className="text-[10px] c-text-2 mt-1">Parciales: 7-0, 9-1, 11-2 o que el rival no pase de 2 (ej. 21-2). Normal: Terminar a 21 con el rival haciendo entre 3 y 19. Ajustado: 22-20, 23-21...</p>
             </Panel>
 
-            {partido.apuestas.length > 0 && (
+            {!modoEspectador && partido.apuestas.length > 0 && (
               <Panel icon={Ticket} titulo={`Apuestas de esta mesa (${partido.apuestas.length})`}>
                 <div className="space-y-1">
                   {partido.apuestas.map((ap) => (
@@ -2781,9 +2886,14 @@ export default function CasaApuestasPingpong() {
                     titulo={`${fechaStr} · ${horaStr}`}
                     badge={
                       !modoEspectador && (
-                        <button onClick={() => eliminarPartidoHistorial(p.id)} className="text-xs c-text-red2 underline font-bold active:scale-95 transition-transform">
-                          Borrar
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => abrirEdicionPartido(p)} className="text-xs c-text-blue underline font-bold active:scale-95 transition-transform">
+                            Editar
+                          </button>
+                          <button onClick={() => eliminarPartidoHistorial(p.id)} className="text-xs c-text-red2 underline font-bold active:scale-95 transition-transform">
+                            Borrar
+                          </button>
+                        </div>
                       )
                     }
                   >
@@ -2798,7 +2908,7 @@ export default function CasaApuestasPingpong() {
                         <span key={n}>{i > 0 && ", "}{n} {antes.toFixed(0)}→{p.ratingsDespues[n].toFixed(0)}</span>
                       ))}
                     </div>
-                    {(p.apuestas || []).length > 0 && (
+                    {!modoEspectador && (p.apuestas || []).length > 0 && (
                       <div className="pt-1 space-y-0.5">
                         {(p.apuestas || []).map((ap) => (
                           <div key={ap.id} onClick={() => setDetalleApuestaVisible(ap)} className={`text-xs flex justify-between p-1.5 -mx-1.5 rounded-md cursor-pointer hover:bg-black/5 active:scale-[0.98] transition-all ${ap.estado === "ganada" ? "c-text-green" : "c-text-red2"}`}>
@@ -2938,6 +3048,36 @@ export default function CasaApuestasPingpong() {
           textoConfirmar="Recargar historial"
           peligro
         />
+      )}
+
+      {editandoPartido && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditandoPartido(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
+            <div className="font-bold c-text-1">Editar partido</div>
+            <div className="grid grid-cols-2 gap-2">
+              <input inputMode="numeric" placeholder="Puntos A" value={editandoPartido.pa} onChange={(e) => setEditandoPartido({ ...editandoPartido, pa: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
+              <input inputMode="numeric" placeholder="Puntos B" value={editandoPartido.pb} onChange={(e) => setEditandoPartido({ ...editandoPartido, pb: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
+            </div>
+            <input placeholder="Hora (ej. 21:00)" value={editandoPartido.hora} onChange={(e) => setEditandoPartido({ ...editandoPartido, hora: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+            <div className="grid grid-cols-2 gap-2">
+              <input placeholder="Lado A" value={editandoPartido.ladoA} onChange={(e) => setEditandoPartido({ ...editandoPartido, ladoA: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+              <input placeholder="Lado B" value={editandoPartido.ladoB} onChange={(e) => setEditandoPartido({ ...editandoPartido, ladoB: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+            </div>
+            <input placeholder="Sol molestaba en el lado... (o vacío)" value={editandoPartido.solLado} onChange={(e) => setEditandoPartido({ ...editandoPartido, solLado: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+            <label className="flex items-center gap-2 text-sm c-text-2">
+              <input type="checkbox" checked={editandoPartido.viento} onChange={(e) => setEditandoPartido({ ...editandoPartido, viento: e.target.checked })} /> Hacía viento
+            </label>
+            <label className="flex items-center gap-2 text-sm c-text-2">
+              <input type="checkbox" checked={editandoPartido.esGM} onChange={(e) => setEditandoPartido({ ...editandoPartido, esGM: e.target.checked })} /> Era partido de título (Gran Maestría)
+            </label>
+            {error && <div className="text-xs c-text-red2">{error}</div>}
+            <div className="text-[10px] c-text-2">Al guardar se recalculan los ratings y el título desde este partido en adelante.</div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => { setEditandoPartido(null); setError(""); }} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={guardarEdicionPartido} className="flex-1 rounded-lg c-bg-orange c-text-1 py-2 text-sm font-bold">Guardar</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {perfilAbierto && (
