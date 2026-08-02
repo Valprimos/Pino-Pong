@@ -624,6 +624,120 @@ function historialACSV(historial) {
   return filas.map((f) => f.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
 }
 
+// Parser CSV sencillo (soporta campos entre comillas, comas dentro de comillas
+// y comillas escapadas como "").
+function parsearCSV(texto) {
+  const limpio = texto.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+  const lineas = [];
+  let fila = [], campo = "", dentroComillas = false;
+  for (let i = 0; i < limpio.length; i++) {
+    const c = limpio[i];
+    if (dentroComillas) {
+      if (c === '"') {
+        if (limpio[i + 1] === '"') { campo += '"'; i++; }
+        else dentroComillas = false;
+      } else campo += c;
+    } else {
+      if (c === '"') dentroComillas = true;
+      else if (c === ',') { fila.push(campo); campo = ""; }
+      else if (c === '\n') { fila.push(campo); lineas.push(fila); fila = []; campo = ""; }
+      else campo += c;
+    }
+  }
+  if (campo.length > 0 || fila.length > 0) { fila.push(campo); lineas.push(fila); }
+  const filasLimpias = lineas.filter((f) => f.some((v) => v.trim() !== ""));
+  if (filasLimpias.length < 2) return [];
+  const cabecera = filasLimpias[0].map((h) => h.trim());
+  return filasLimpias.slice(1).map((f) => {
+    const obj = {};
+    cabecera.forEach((h, i) => { obj[h] = (f[i] ?? "").trim(); });
+    return obj;
+  });
+}
+
+function parsearFechaCSV(fechaStr, horaStr) {
+  const partes = (fechaStr || "").split("/").map((s) => parseInt(s, 10));
+  if (partes.length !== 3 || partes.some((n) => isNaN(n))) return new Date();
+  const [d, m, y] = partes;
+  const [hh, mm] = (horaStr || "12:00").split(":").map((s) => parseInt(s, 10));
+  return new Date(y, m - 1, d, isNaN(hh) ? 12 : hh, isNaN(mm) ? 0 : mm);
+}
+
+// Aplica filas de un CSV subido a mano SOBRE el estado actual (sin borrar
+// nada de lo que ya había): actualiza ratings, título y añade filas nuevas
+// al historial. Los partidos de dobles ("X y Y") se ignoran, igual que en
+// el historial real. Lanza un Error con un mensaje claro si algo no cuadra.
+function procesarCSVSubido(filasCSV, estadoActual) {
+  let jugadores = { ...(estadoActual.jugadores || {}) };
+  let gm = estadoActual.gm;
+  let pendiente = estadoActual.pendiente;
+  const nuevasEntradas = [];
+
+  // El CSV puede venir más-reciente-primero (como el que exporta la propia
+  // app) o más-antiguo-primero; los ordenamos por fecha para aplicarlos en
+  // el orden correcto sin importar cómo vengan.
+  const filasConFecha = filasCSV.map((f, i) => ({ f, fecha: parsearFechaCSV(f.Fecha, f.Hora), i }));
+  filasConFecha.sort((x, y) => x.fecha - y.fecha || x.i - y.i);
+
+  filasConFecha.forEach(({ f, fecha }, idx) => {
+    const nombreA = (f.JugadorA || "").trim();
+    const nombreB = (f.JugadorB || "").trim();
+    if (!nombreA || !nombreB) return;
+    if (nombreA.includes(" y ") || nombreB.includes(" y ")) return; // dobles: se ignoran
+
+    const pa = Number(f.PuntosA), pb = Number(f.PuntosB);
+    if (isNaN(pa) || isNaN(pb) || pa === pb) {
+      throw new Error(`Fila con marcador inválido: ${nombreA} ${f.PuntosA} - ${f.PuntosB} ${nombreB}`);
+    }
+
+    if (jugadores[nombreA] === undefined) jugadores[nombreA] = RATING_INICIAL;
+    if (jugadores[nombreB] === undefined) jugadores[nombreB] = RATING_INICIAL;
+
+    const ratingsAntes = { [nombreA]: jugadores[nombreA], [nombreB]: jugadores[nombreB] };
+    const ganoA = pa > pb;
+    const movMulti = calcularMovMulti(pa, pb);
+    const pEloBase = expectedScore(jugadores[nombreA], jugadores[nombreB]);
+    const sA = ganoA ? 1 : 0, sB = ganoA ? 0 : 1;
+    const deltaA = K_FACTOR * movMulti * (sA - pEloBase);
+    const deltaB = K_FACTOR * movMulti * (sB - (1 - pEloBase));
+    jugadores[nombreA] += deltaA;
+    jugadores[nombreB] += deltaB;
+
+    const ganador = ganoA ? nombreA : nombreB;
+    const esGM = (f.GranMaestria || "").trim().toLowerCase() === "sí" || (f.GranMaestria || "").trim().toLowerCase() === "si";
+    const resultado = actualizarTitulo(gm, pendiente, esGM, ganador);
+    gm = resultado.gm; pendiente = resultado.pendiente;
+
+    const sol = (f.Sol || "").trim();
+    const viento = (f.Viento || "").trim().toLowerCase();
+
+    nuevasEntradas.push({
+      id: Date.now() + idx,
+      fecha: fecha.toISOString(),
+      hora: (f.Hora || "").trim() || null,
+      ladoA: (f.CampoA || "").trim() || null,
+      ladoB: (f.CampoB || "").trim() || null,
+      solLado: (sol && sol.toLowerCase() !== "no") ? sol : null,
+      viento: viento === "sí" || viento === "si",
+      teamA: [nombreA], teamB: [nombreB], aLabel: nombreA, bLabel: nombreB,
+      pa, pb, esGM,
+      ganador, ratingsAntes, ratingsDespues: { [nombreA]: jugadores[nombreA], [nombreB]: jugadores[nombreB] },
+      apuestas: [],
+    });
+  });
+
+  if (nuevasEntradas.length === 0) return null;
+
+  const bettors = { ...(estadoActual.bettors || {}) };
+  Object.keys(jugadores).forEach((n) => { if (bettors[n] === undefined) bettors[n] = 500; });
+
+  return {
+    jugadores, gm, pendiente, bettors,
+    historial: [...nuevasEntradas.reverse(), ...(estadoActual.historial || [])],
+    partidosAnadidos: nuevasEntradas.length,
+  };
+}
+
 function descargarCSV(contenido, nombreArchivo) {
   const blob = new Blob(["\uFEFF" + contenido], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
@@ -1255,6 +1369,8 @@ export default function CasaApuestasPingpong() {
   const [cantidadDonar, setCantidadDonar] = useState("");
 
   const prevSlipLen = useRef(0);
+  const csvInputRef = useRef(null);
+  const [csvImportMsg, setCsvImportMsg] = useState(null); // { tipo: "ok"|"error", texto }
   const ultimoSincronizado = useRef(null);
 
   useEffect(() => {
@@ -1634,6 +1750,7 @@ export default function CasaApuestasPingpong() {
 
   function confirmarSlip() {
     setSlipError("");
+    if (enPrevisualizacion) { setSlipError("Este partido todavía es una vista previa. Publícalo antes de que se pueda apostar."); return; }
     const nombre = bettorSlip.trim();
     if (!nombre) { setSlipError("Escribe el nombre de quién hace la apuesta."); return; }
     if (estado.vetados?.includes(nombre)) { setSlipError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
@@ -1723,6 +1840,7 @@ export default function CasaApuestasPingpong() {
   }
 
   function iniciarCierrePartido() {
+    if (enPrevisualizacion) { setError("Publica el partido antes de poder cerrarlo con un resultado."); return; }
     const pa = Number(marcador.a), pb = Number(marcador.b);
     if (isNaN(pa) || isNaN(pb) || pa === pb) { setError("Introduce un marcador válido."); return; }
     if (!isValidScore(pa, pb)) { setError("Ese marcador no es un resultado válido para acabar un partido (tiene que llegar a 21 ganando de 2, o ser un parcial válido como 7-0)."); return; }
@@ -1835,6 +1953,33 @@ export default function CasaApuestasPingpong() {
   async function recargarHistorialReal() {
     await persistir(construirEstadoDesdeHistorialReal());
     setConfirmRecargarHistorial(false);
+  }
+
+  function handleSubirCSV(e) {
+    const archivo = e.target.files && e.target.files[0];
+    e.target.value = ""; // permite volver a subir el mismo archivo si hace falta
+    if (!archivo) return;
+    setCsvImportMsg(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const filas = parsearCSV(String(ev.target.result));
+        if (filas.length === 0) {
+          setCsvImportMsg({ tipo: "error", texto: "El CSV no tiene filas de partidos válidas." });
+          return;
+        }
+        const resultado = procesarCSVSubido(filas, estado);
+        if (!resultado) {
+          setCsvImportMsg({ tipo: "error", texto: "No se encontró ningún partido nuevo válido (o eran todo dobles, que se ignoran)." });
+          return;
+        }
+        persistir({ ...estado, ...resultado });
+        setCsvImportMsg({ tipo: "ok", texto: `Se añadieron ${resultado.partidosAnadidos} partido(s) al historial.` });
+      } catch (err) {
+        setCsvImportMsg({ tipo: "error", texto: err.message || "No se pudo leer el CSV." });
+      }
+    };
+    reader.readAsText(archivo, "utf-8");
   }
 
   // --- DERIVACIÓN DE DATOS PARA LA VISTA ---
@@ -2158,11 +2303,20 @@ export default function CasaApuestasPingpong() {
 
         {tab === "partido" && partido && mercados && (
           <div className="space-y-3">
+            {enPrevisualizacion && (
+              <div className="rounded-xl border-2 border-dashed c-bd-orange c-bg-app p-3 space-y-2">
+                <div className="text-xs font-bold uppercase tracking-wide c-text-orange">🔒 Vista previa — solo la ves tú, todavía no es pública</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={descartarPrevisualizacion} className="rounded-lg border c-bd-1 c-text-2 font-semibold py-2 text-sm">⬅ Descartar</button>
+                  <button onClick={publicarPartido} className="rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2 text-sm">✅ Publicar para todos</button>
+                </div>
+              </div>
+            )}
             <div className="rounded-xl c-grad-banner border c-bd-1 p-3">
               <div className="flex items-center justify-between">
-                <Chip tone="live">● en juego</Chip>
+                <Chip tone="live">{enPrevisualizacion ? "🔒 borrador" : "● en juego"}</Chip>
                 {partido.esGM && <Chip tone="gold"><Crown size={10} className="inline -mt-0.5" /> título en juego</Chip>}
-                {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">cancelar partido</button>}
+                {!modoEspectador && <button onClick={cancelarPartido} className="c-text-2 hover:c-text-1 text-xs underline">{enPrevisualizacion ? "descartar borrador" : "cancelar partido"}</button>}
               </div>
               <div className="flex items-center gap-2 mt-2">
                 <Avatar name={partido.a} size={32} />
@@ -2597,6 +2751,19 @@ export default function CasaApuestasPingpong() {
                 ⬇️ Exportar historial a CSV
               </button>
             )}
+            {!modoEspectador && (
+              <>
+                <input ref={csvInputRef} type="file" accept=".csv" onChange={handleSubirCSV} style={{ display: "none" }} />
+                <button onClick={() => csvInputRef.current?.click()} className="w-full rounded-lg border border-dashed c-bd-1 c-text-2 text-sm font-semibold py-2.5 bg-white">
+                  ⬆️ Subir CSV de resultados
+                </button>
+                {csvImportMsg && (
+                  <div className={`text-xs rounded-lg px-3 py-2 ${csvImportMsg.tipo === "ok" ? "c-bg-green-soft c-text-green-dark" : "c-bg-red-soft c-text-red2"}`}>
+                    {csvImportMsg.texto}
+                  </div>
+                )}
+              </>
+            )}
             
             {(estado.historial || []).length === 0 ? (
               <Panel icon={History} titulo="Historial">
@@ -2762,7 +2929,6 @@ export default function CasaApuestasPingpong() {
       
       <ModalDetalleApuesta apuesta={detalleApuestaVisible} onCerrar={() => setDetalleApuestaVisible(null)} />
 
-      {confirmBorrar && (
       {confirmRecargarHistorial && (
         <ModalConfirmar
           titulo="¿Recargar el historial real?"
