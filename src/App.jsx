@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, useContext, createContext } from "react";
 import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCcw, Loader2, Clock, Sun, Wind, Eye, EyeOff, Info, Trash2, Ban, BarChart2, Gift, Target, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronUp } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, onValue, set as dbSet } from "firebase/database";
@@ -12,6 +12,7 @@ const db = getDatabase(firebaseApp);
 const ESTADO_DB_REF = dbRef(db, "casaPingpongEstado");
 
 const RATING_INICIAL = 1000;
+const FotosContext = createContext({});
 const K_FACTOR = 32;
 
 // --- NUEVO MOTOR MATEMÁTICO BASADO EN HISTORIAL REAL DE PUNTOS ---
@@ -803,7 +804,7 @@ function descargarCSV(contenido, nombreArchivo) {
 const ESTADO_DEFECTO = {
   jugadores: {}, gm: null, pendiente: null, margen: 0.08,
   bettors: {}, partidoAbierto: null, historial: [], vetados: [],
-  passwords: {},
+  passwords: {}, fotos: {},
 };
 
 // Se suscribe a los cambios del estado compartido en Firebase.
@@ -992,7 +993,19 @@ function colorFromName(name) {
 }
 
 function Avatar({ name, size = 28 }) {
+  const fotos = useContext(FotosContext);
+  const foto = fotos?.[name];
   const iniciales = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  if (foto) {
+    return (
+      <img
+        src={foto}
+        alt={name}
+        className="inline-flex rounded-full object-cover shrink-0 ring-2 ring-black/20 shadow-sm"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
   return (
     <span
       className="inline-flex items-center justify-center rounded-full font-bold c-text-1 shrink-0 ring-2 ring-black/20 shadow-sm"
@@ -1208,7 +1221,7 @@ function ModalDetalleApuesta({ apuesta, onCerrar }) {
 
 function Confeti({ nombre, onFin, tipo = "gm" }) {
   useEffect(() => { const t = setTimeout(onFin, 2400); return () => clearTimeout(t); }, [onFin]);
-  const emojis = tipo === "supercuota" ? ["🔥", "💰", "⚡", "✨"] : ["🎉", "🏓", "👑", "🥳"];
+  const emojis = tipo === "supercuota" ? ["🔥", "💰", "⚡", "✨"] : tipo === "apuestaGanada" ? ["💸", "🏆", "🎉", "💰"] : ["🎉", "🏓", "👑", "🥳"];
   const piezas = useMemo(() => Array.from({ length: 30 }, (_, i) => ({
     id: i, left: Math.random() * 100, delay: Math.random() * 0.6, dur: 1.6 + Math.random() * 1,
     emoji: emojis[i % 4],
@@ -1219,10 +1232,15 @@ function Confeti({ nombre, onFin, tipo = "gm" }) {
         <span key={p.id} className="absolute text-2xl" style={{ left: `${p.left}%`, top: "-40px", animation: `caer ${p.dur}s ease-in ${p.delay}s forwards` }}>{p.emoji}</span>
       ))}
       <div className="absolute top-16 inset-x-0 flex justify-center px-4">
-        <div className={`c-bg-white-95 border rounded-xl px-4 py-2.5 text-center shadow-2xl c-anim-fadein-3 ${tipo === "supercuota" ? "boost-cuota" : "c-bd-gold-50"}`}>
+        <div className={`c-bg-white-95 border rounded-xl px-4 py-2.5 text-center shadow-2xl c-anim-fadein-3 ${tipo === "supercuota" ? "boost-cuota" : tipo === "apuestaGanada" ? "c-bg-green c-bd-green-50" : "c-bd-gold-50"}`}>
           {tipo === "supercuota" ? (
             <>
               <div className="text-white font-extrabold text-sm flex items-center gap-1.5 justify-center">🔥 ¡SUPERCUOTA CONFIRMADA!</div>
+              <div className="text-white font-bold text-lg" style={{ fontFamily: "'Bebas Neue', sans-serif" }}>{nombre}</div>
+            </>
+          ) : tipo === "apuestaGanada" ? (
+            <>
+              <div className="text-white font-extrabold text-sm flex items-center gap-1.5 justify-center">💰 ¡HAS GANADO LA APUESTA!</div>
               <div className="text-white font-bold text-lg" style={{ fontFamily: "'Bebas Neue', sans-serif" }}>{nombre}</div>
             </>
           ) : (
@@ -1252,9 +1270,10 @@ function ModalConfirmar({ titulo, mensaje, onCancelar, onConfirmar, textoConfirm
   );
 }
 
-function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar }) {
+function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar, puedeEditarFoto, onSubirFoto }) {
   const rivales = Object.entries(perfil.h2h).sort((a, b) => b[1].n - a[1].n);
   const [h2hExpandido, setH2hExpandido] = useState(null);
+  const fotoInputRef = useRef(null);
 
   const st = statsAvanzadas || { cV:0, cD:0, kV:0, kD:0, solV:0, solD:0, solRivalV:0, solRivalD:0, vientoV:0, vientoD:0, upsetV:0, upsetD:0, favV:0, favD:0 };
   const partidosJugados = st.cV + st.cD + st.kV + st.kD;
@@ -1264,7 +1283,17 @@ function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar }) {
       <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-md border c-bd-1 c-maxh-80vh overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <Avatar name={nombre} size={40} />
+            <div className="relative">
+              <Avatar name={nombre} size={40} />
+              {puedeEditarFoto && (
+                <>
+                  <input ref={fotoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) onSubirFoto(f); e.target.value = ""; }} />
+                  <button onClick={() => fotoInputRef.current?.click()} title="Cambiar foto" className="absolute -bottom-1 -right-1 c-bg-orange rounded-full p-1 shadow border-2 border-white">
+                    <Plus size={10} className="c-text-dark-on-accent" />
+                  </button>
+                </>
+              )}
+            </div>
             <div>
               <div className="font-bold c-text-1 text-2xl" style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.02em" }}>{nombre.toUpperCase()}</div>
               <div className="flex gap-2 text-xs">
@@ -1275,6 +1304,7 @@ function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar }) {
           </div>
           <button onClick={onCerrar} className="c-text-2 bg-gray-100 p-1.5 rounded-full hover:bg-gray-200"><X size={20} /></button>
         </div>
+
 
         {Math.abs(perfil.racha) >= 2 && (
           <div className="mb-4">
@@ -1408,6 +1438,19 @@ export default function CasaApuestasPingpong() {
   const [marcador, setMarcador] = useState({ a: "", b: "" });
   const [error, setError] = useState("");
   const [celebracion, setCelebracion] = useState(null);
+  const idsCelebrados = useRef(new Set());
+  const primerCheckCelebracion = useRef(true);
+
+  useEffect(() => {
+    if (!estado?.historial?.length) return;
+    const ultimo = estado.historial[0];
+    if (idsCelebrados.current.has(ultimo.id)) return;
+    idsCelebrados.current.add(ultimo.id);
+    if (primerCheckCelebracion.current) { primerCheckCelebracion.current = false; return; }
+    if (identidadActual && (ultimo.apuestas || []).some((ap) => ap.bettor === identidadActual && ap.estado === "ganada")) {
+      setCelebracion({ nombre: identidadActual, tipo: "apuestaGanada" });
+    }
+  }, [estado?.historial, identidadActual]);
   const [confirmRecargarHistorial, setConfirmRecargarHistorial] = useState(false);
   const [previsualizacion, setPrevisualizacion] = useState(null);
   const [modoEspectador, setModoEspectador] = useState(true);
@@ -1619,6 +1662,28 @@ export default function CasaApuestasPingpong() {
     persistir({ ...estado, passwords: nuevasPasswords });
   }
 
+  function subirFotoPerfil(nombre, file) {
+    if (!file) return;
+    const img = new Image();
+    const lector = new FileReader();
+    lector.onload = (ev) => {
+      img.onload = () => {
+        // Redimensionamos a un cuadrado pequeño para no llenar la base de
+        // datos de imágenes enormes: recorte centrado + 200x200 + JPEG.
+        const lado = Math.min(img.width, img.height);
+        const sx = (img.width - lado) / 2, sy = (img.height - lado) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = 200; canvas.height = 200;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, sx, sy, lado, lado, 0, 0, 200, 200);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        persistir({ ...estado, fotos: { ...(estado.fotos || {}), [nombre]: dataUrl } });
+      };
+      img.src = ev.target.result;
+    };
+    lector.readAsDataURL(file);
+  }
+
   const PASSWORD_BOSS = "123457";
 
   function pedirModoBoss() {
@@ -1733,6 +1798,7 @@ export default function CasaApuestasPingpong() {
     const auto = (selA === estado.gm || selB === estado.gm);
     const nuevo = {
       id: Date.now(), a: selA, b: selB, esGM: esGM && auto, apuestas: [],
+      fecha: new Date().toISOString(),
       hora: horaInput, ladoA: ladoAInput, ladoB: ladoBAuto, solLado: solLadoInput, viento: vientoInput,
       mercadosCustom: [], boosts: {}
     };
@@ -2043,7 +2109,7 @@ export default function CasaApuestasPingpong() {
       ratingsAntes: { [partido.a]: ratingA0, [partido.b]: ratingB0 },
       ratingsDespues: { [partido.a]: nuevoA, [partido.b]: nuevoB },
       apuestas: apuestasResueltas,
-      fecha: new Date().toISOString(),
+      fecha: partido.fecha || new Date().toISOString(),
     };
     const coronacion = !!(gm && gm !== estado.gm);
     const rachaRota = calcularRacha(estado.historial || [], perdedor) >= 3;
@@ -2172,7 +2238,7 @@ export default function CasaApuestasPingpong() {
     const isLocked = b === "LOCKED";
     const valorReal = isLocked ? null : (b ?? base);
     const esRealBoost = b !== null && !isLocked && b > base;
-    return { valor: valorReal, base, boosteado: !modoEspectador && esRealBoost, locked: isLocked };
+    return { valor: valorReal, base, boosteado: esRealBoost, locked: isLocked };
   };
 
   const bGanadorA = ganadorConDinero ? conBoost("Ganador", partido.a, ganadorConDinero.A) : null;
@@ -2262,6 +2328,7 @@ export default function CasaApuestasPingpong() {
   ];
 
   return (
+    <FotosContext.Provider value={estado.fotos || {}}>
     <div className="min-h-screen c-bg-app c-text-1 pb-24" style={{ fontFamily: "'Inter', sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&family=Space+Mono&family=Caveat:wght@600;700&display=swap');
@@ -3040,8 +3107,8 @@ export default function CasaApuestasPingpong() {
       {slip.length > 0 && !slipOpen && (
         <button
           onClick={() => setSlipOpen(true)}
-          style={{ animation: fabPop ? "fabPop .26s ease" : "none" }}
-          className="fixed bottom-20 right-4 z-40 c-bg-orange c-text-dark-on-accent rounded-full pl-3 pr-4 py-3 c-shadow-fab flex items-center gap-2 font-bold text-sm"
+          style={{ animation: fabPop ? "fabPop .26s ease" : "none", bottom: "calc(5rem + env(safe-area-inset-bottom, 0px))" }}
+          className="fixed right-4 z-40 c-bg-orange c-text-dark-on-accent rounded-full pl-3 pr-4 py-3 c-shadow-fab flex items-center gap-2 font-bold text-sm"
         >
           <Ticket size={18} /> {slip.length} · {totalSlipStake.toFixed(2)} fichas
         </button>
@@ -3287,6 +3354,8 @@ export default function CasaApuestasPingpong() {
           rating={ratingDe(perfilAbierto)}
           statsAvanzadas={statsCampos.porJugador[perfilAbierto]}
           onCerrar={() => setPerfilAbierto(null)}
+          puedeEditarFoto={!modoEspectador || identidadActual === perfilAbierto}
+          onSubirFoto={(file) => subirFotoPerfil(perfilAbierto, file)}
         />
       )}
 
@@ -3478,5 +3547,6 @@ export default function CasaApuestasPingpong() {
         </div>
       )}
     </div>
+    </FotosContext.Provider>
   );
 }
