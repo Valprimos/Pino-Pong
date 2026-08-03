@@ -793,6 +793,7 @@ function descargarCSV(contenido, nombreArchivo) {
 const ESTADO_DEFECTO = {
   jugadores: {}, gm: null, pendiente: null, margen: 0.08,
   bettors: {}, partidoAbierto: null, historial: [], vetados: [],
+  passwords: {},
 };
 
 // Se suscribe a los cambios del estado compartido en Firebase.
@@ -1370,7 +1371,13 @@ export default function CasaApuestasPingpong() {
   const [slip, setSlip] = useState([]);
   const [slipOpen, setSlipOpen] = useState(false);
   const [slipError, setSlipError] = useState("");
-  const [bettorSlip, setBettorSlip] = useState("");
+  const [identidadActual, setIdentidadActual] = useState(() => {
+    try { return localStorage.getItem("pinamax_identidad") || ""; } catch (e) { return ""; }
+  });
+  const [modalLogin, setModalLogin] = useState(null); // { nombreSel, passwordInput, error }
+  const [modalCuentas, setModalCuentas] = useState(false);
+  const [nuevoApostadorNombre, setNuevoApostadorNombre] = useState("");
+  const [nuevoApostadorFichas, setNuevoApostadorFichas] = useState("500");
   const [modoSlip, setModoSlip] = useState("simples");
   const [stakeCombinada, setStakeCombinada] = useState("50");
   const [handicapK, setHandicapK] = useState(5);
@@ -1534,6 +1541,55 @@ export default function CasaApuestasPingpong() {
 
   function fijarGMInicial(nombre) {
     persistir({ ...estado, gm: nombre });
+  }
+
+  // --- CUENTAS / INICIO DE SESIÓN ---
+  // Nota de seguridad: esto es solo un filtro casero para que la peña no
+  // pueda apostar como otro por error o de coña. Las reglas de la base de
+  // datos son abiertas (sin backend propio), así que no es una autenticación
+  // real a prueba de alguien que mire el código con malas intenciones.
+
+  function abrirLogin() {
+    setModalLogin({ nombreSel: identidadActual || "", passwordInput: "", error: "" });
+  }
+
+  function intentarLogin() {
+    const { nombreSel, passwordInput } = modalLogin;
+    if (!nombreSel) { setModalLogin({ ...modalLogin, error: "Elige tu nombre." }); return; }
+    const passActual = estado.passwords?.[nombreSel];
+    if (!passActual) {
+      // Primera vez que esta cuenta inicia sesión: la contraseña que escriba ahora se queda fijada.
+      if (!passwordInput || passwordInput.length < 4) { setModalLogin({ ...modalLogin, error: "Elige una contraseña de al menos 4 caracteres (es la primera vez que entras con esta cuenta)." }); return; }
+      persistir({ ...estado, passwords: { ...(estado.passwords || {}), [nombreSel]: passwordInput } });
+    } else if (passActual !== passwordInput) {
+      setModalLogin({ ...modalLogin, error: "Contraseña incorrecta." });
+      return;
+    }
+    setIdentidadActual(nombreSel);
+    try { localStorage.setItem("pinamax_identidad", nombreSel); } catch (e) {}
+    setModalLogin(null);
+  }
+
+  function cerrarSesion() {
+    setIdentidadActual("");
+    try { localStorage.removeItem("pinamax_identidad"); } catch (e) {}
+  }
+
+  function agregarApostador() {
+    const nombre = nuevoApostadorNombre.trim();
+    const fichas = Number(nuevoApostadorFichas);
+    if (!nombre) return;
+    if (estado.bettors[nombre] !== undefined) { setNuevoApostadorNombre(""); return; }
+    persistir({ ...estado, bettors: { ...estado.bettors, [nombre]: isNaN(fichas) ? 500 : fichas } });
+    setNuevoApostadorNombre("");
+    setNuevoApostadorFichas("500");
+  }
+
+  function resetPasswordCuenta(nombre) {
+    if (!window.confirm(`¿Borrar la contraseña de ${nombre}? Podrá elegir una nueva la próxima vez que inicie sesión.`)) return;
+    const nuevasPasswords = { ...(estado.passwords || {}) };
+    delete nuevasPasswords[nombre];
+    persistir({ ...estado, passwords: nuevasPasswords });
   }
 
   const PASSWORD_BOSS = "123457";
@@ -1809,8 +1865,8 @@ export default function CasaApuestasPingpong() {
     setSlipError("");
     if (enPrevisualizacion) { setSlipError("Este partido todavía es una vista previa. Publícalo antes de que se pueda apostar."); return; }
     if (partido?.apuestasCerradas) { setSlipError("La casa ha cerrado las apuestas para este partido."); return; }
-    const nombre = bettorSlip.trim();
-    if (!nombre) { setSlipError("Escribe el nombre de quién hace la apuesta."); return; }
+    const nombre = identidadActual;
+    if (!nombre) { setSlipError("Inicia sesión con tu cuenta antes de apostar."); return; }
     if (estado.vetados?.includes(nombre)) { setSlipError(`${nombre} está vetado por la casa y no puede apostar.`); return; }
     
     const hasLocked = slip.some(s => boostDe(partido, s.mercado, s.seleccion) === "LOCKED");
@@ -2275,6 +2331,14 @@ export default function CasaApuestasPingpong() {
             </h1>
           </div>
           <div className="flex items-center gap-3">
+            <button onClick={identidadActual ? cerrarSesion : abrirLogin} title={identidadActual ? "Cerrar sesión" : "Iniciar sesión"} className="text-xs font-semibold c-text-2 hover:c-text-1 transition-colors">
+              {identidadActual ? `👤 ${identidadActual}` : "👤 login"}
+            </button>
+            {!modoEspectador && (
+              <button onClick={() => setModalCuentas(true)} title="Gestionar cuentas" className="c-text-2 hover:c-text-1 transition-colors">
+                <Users size={16} />
+              </button>
+            )}
             <button onClick={() => (modoEspectador ? pedirModoBoss() : pasarAEspectador())} title="Modo espectador / boss" className={modoEspectador ? "c-text-orange" : "c-text-2 hover:c-text-1 transition-colors"}>
               {modoEspectador ? <Eye size={16} /> : <EyeOff size={16} />}
             </button>
@@ -2989,10 +3053,16 @@ export default function CasaApuestasPingpong() {
                     <button onClick={() => quitarDeSlip(s.id)} className="c-text-red2"><X size={16} /></button>
                   </div>
                 ))}
-                <select value={bettorSlip} onChange={(e) => setBettorSlip(e.target.value)} style={{ colorScheme: "light" }} className="w-full rounded-lg border c-bd-1 c-bg-white p-2 text-sm c-text-1 shadow-inner">
-                  <option value="">¿Quién apuesta?</option>
-                  {nombresJugadores.map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
+                {identidadActual ? (
+                  <div className="w-full rounded-lg border c-bd-1 c-bg-white p-2 text-sm c-text-1 flex items-center justify-between">
+                    <span>Apostando como <b>{identidadActual}</b></span>
+                    <button onClick={cerrarSesion} className="text-xs c-text-2 underline">cambiar cuenta</button>
+                  </div>
+                ) : (
+                  <button onClick={abrirLogin} className="w-full rounded-lg border c-bd-orange c-text-orange font-bold p-2 text-sm">
+                    Inicia sesión para apostar
+                  </button>
+                )}
 
                 {modoSlip === "combinada" && slip.length >= 2 ? (
                   <>
@@ -3076,6 +3146,56 @@ export default function CasaApuestasPingpong() {
               <button onClick={() => { setEditandoPartido(null); setError(""); }} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={guardarEdicionPartido} className="flex-1 rounded-lg c-bg-orange c-text-1 py-2 text-sm font-bold">Guardar</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {modalLogin && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalLogin(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
+            <div className="font-bold c-text-1">Iniciar sesión</div>
+            <select value={modalLogin.nombreSel} onChange={(e) => setModalLogin({ ...modalLogin, nombreSel: e.target.value, error: "" })} style={{ colorScheme: "light" }} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1">
+              <option value="">Elige tu cuenta</option>
+              {Object.keys(estado.bettors || {}).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <input type="password" placeholder={modalLogin.nombreSel && !estado.passwords?.[modalLogin.nombreSel] ? "Elige una contraseña (primera vez)" : "Contraseña"} value={modalLogin.passwordInput} onChange={(e) => setModalLogin({ ...modalLogin, passwordInput: e.target.value, error: "" })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+            {modalLogin.error && <div className="text-xs c-text-red2">{modalLogin.error}</div>}
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setModalLogin(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={intentarLogin} className="flex-1 rounded-lg c-bg-orange c-text-1 py-2 text-sm font-bold">Entrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalCuentas && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalCuentas(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-sm space-y-3 border c-bd-1 max-h-[80vh] overflow-y-auto">
+            <div className="font-bold c-text-1">Gestionar cuentas</div>
+
+            <div className="space-y-1.5">
+              {Object.keys(estado.bettors || {}).sort().map((n) => (
+                <div key={n} className="flex items-center justify-between text-sm c-bg-app rounded-lg p-2 border c-bd-1">
+                  <div className="c-text-1">
+                    {n} <span className="c-text-2 text-xs">({(estado.bettors[n] ?? 0).toFixed(0)} fichas)</span>
+                  </div>
+                  {estado.passwords?.[n] ? (
+                    <button onClick={() => resetPasswordCuenta(n)} className="text-xs c-text-red2 underline">quitar contraseña</button>
+                  ) : (
+                    <span className="text-xs c-text-2">sin contraseña</span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t c-bd-1 space-y-2">
+              <div className="text-xs font-bold c-text-2 uppercase tracking-wide">Añadir apostador</div>
+              <input placeholder="Nombre" value={nuevoApostadorNombre} onChange={(e) => setNuevoApostadorNombre(e.target.value)} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+              <input inputMode="numeric" placeholder="Fichas iniciales (500)" value={nuevoApostadorFichas} onChange={(e) => setNuevoApostadorFichas(e.target.value)} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+              <button onClick={agregarApostador} className="w-full rounded-lg c-bg-orange c-text-1 py-2 text-sm font-bold">Añadir</button>
+            </div>
+
+            <button onClick={() => setModalCuentas(false)} className="w-full rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cerrar</button>
           </div>
         </div>
       )}
