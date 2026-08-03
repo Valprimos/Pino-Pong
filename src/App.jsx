@@ -345,7 +345,7 @@ function sonContradictorias(a, b, partido) {
   if (isCustom(a.mercado) || isCustom(b.mercado)) {
       return (a.mercado === b.mercado && a.seleccion !== b.seleccion);
   }
-  
+
   const allResultados = [];
   for(let pa=0; pa<=35; pa++){
     for(let pb=0; pb<=35; pb++){
@@ -353,14 +353,24 @@ function sonContradictorias(a, b, partido) {
     }
   }
 
-  let vecesGananAmbas = 0;
+  // Recorremos todos los resultados posibles y contamos en qué combinación
+  // de verdad/falsedad caen las dos patas, para saber si son:
+  // - contradictorias (nunca pasan juntas),
+  // - una implica la otra siempre (combinarlas es redundante, no añade riesgo real),
+  // - o son genuinamente independientes (se pueden combinar).
+  let ambas = 0, soloA = 0, soloB = 0;
   for (const r of allResultados) {
     const ctx = { ganador: r.pa > r.pb ? partido.a : partido.b, pa: r.pa, pb: r.pb, nombreA: partido.a, nombreB: partido.b };
-    if (evaluarPata(a.mercado, a.seleccion, ctx, {}) && evaluarPata(b.mercado, b.seleccion, ctx, {})) {
-        vecesGananAmbas++;
-    }
+    const okA = evaluarPata(a.mercado, a.seleccion, ctx, {});
+    const okB = evaluarPata(b.mercado, b.seleccion, ctx, {});
+    if (okA && okB) ambas++;
+    else if (okA && !okB) soloA++;
+    else if (!okA && okB) soloB++;
   }
-  return vecesGananAmbas === 0;
+  if (ambas === 0) return true; // nunca pasan juntas: contradictorias
+  if (soloA === 0) return true; // A siempre que pasa, pasa B: A implica B, redundante
+  if (soloB === 0) return true; // B siempre que pasa, pasa A: B implica A, redundante
+  return false;
 }
 
 // LOGICA DE SGP REESCRITA Y PROTEGIDA
@@ -1359,6 +1369,12 @@ const Lock = ({ size, className }) => (
 export default function CasaApuestasPingpong() {
   const [estado, setEstado] = useState(null);
   const [cargando, setCargando] = useState(true);
+  const [mostrarSplash, setMostrarSplash] = useState(true);
+
+  useEffect(() => {
+    const t = setTimeout(() => setMostrarSplash(false), 1400);
+    return () => clearTimeout(t);
+  }, []);
   const [tab, setTab] = useState("partido");
   const [nuevoJugador, setNuevoJugador] = useState("");
   const [selA, setSelA] = useState("");
@@ -1516,6 +1532,17 @@ export default function CasaApuestasPingpong() {
       guardarEstado(estado);
     }
   }, [estado, cargando]);
+
+  if (mostrarSplash) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center c-bg-app c-anim-fadein-2">
+        <img src="/logo.png" alt="Pino-Pong" className="w-28 h-28 c-anim-splash-logo" />
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.06em" }} className="text-3xl c-text-1 mt-4 c-anim-splash-title">
+          <span className="c-text-orange">PINO-PONG</span>
+        </div>
+      </div>
+    );
+  }
 
   if (cargando || !estado) {
     return (
@@ -1747,6 +1774,11 @@ export default function CasaApuestasPingpong() {
     actualizarPartidoAbierto((p) => ({ ...p, apuestasCerradas: !p.apuestasCerradas }));
   }
 
+  function toggleCombinadasDesactivadas() {
+    actualizarPartidoAbierto((p) => ({ ...p, combinadasDesactivadas: !p.combinadasDesactivadas }));
+    if (modoSlip === "combinada") setModoSlip("simples");
+  }
+
   function cancelarPartido() {
     if (enPrevisualizacion) {
       descartarPrevisualizacion();
@@ -1876,7 +1908,7 @@ export default function CasaApuestasPingpong() {
     const rachaApostante = calcularRachaApuestas(estado.historial || [], nombre);
     const bonus = bonusPorRachaApostante(rachaApostante);
 
-    if (modoSlip === "combinada" && slip.length >= 2) {
+    if (modoSlip === "combinada" && slip.length >= 2 && !partido.combinadasDesactivadas) {
       const stakeVal = Number(stakeCombinada.replace(',', '.')) || 0;
       if (stakeVal <= 0) { setSlipError("Pon una cantidad de fichas válida."); return; }
       if (saldoActual < stakeVal) { setSlipError(`${nombre} solo tiene ${saldoActual.toFixed(2)} fichas.`); return; }
@@ -2060,10 +2092,10 @@ export default function CasaApuestasPingpong() {
 
   function abrirEdicionPartido(p) {
     setEditandoPartido({
-      id: p.id,
+      id: p.id, aLabel: p.aLabel, bLabel: p.bLabel,
       pa: String(p.pa), pb: String(p.pb),
-      ladoA: p.ladoA || "", ladoB: p.ladoB || "",
-      solLado: p.solLado || "", viento: !!p.viento,
+      ladoA: p.ladoA || "Canasta", ladoB: p.ladoB || "Columpios",
+      solLado: p.solLado || null, viento: !!p.viento,
       esGM: !!p.esGM, hora: p.hora || "",
     });
   }
@@ -2492,6 +2524,9 @@ export default function CasaApuestasPingpong() {
                 <button onClick={toggleApuestasCerradas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.apuestasCerradas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-green-soft c-text-green-dark border c-bd-green-50"}`}>
                   {partido.apuestasCerradas ? "🔒 Apuestas cerradas — pulsa para reabrir" : "🟢 Apuestas abiertas — pulsa para cerrar"}
                 </button>
+                <button onClick={toggleCombinadasDesactivadas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.combinadasDesactivadas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-app c-text-2 border c-bd-1"}`}>
+                  {partido.combinadasDesactivadas ? "🚫 Combinadas desactivadas — pulsa para activarlas" : "Combinadas activas — pulsa para desactivarlas"}
+                </button>
                 <div className="text-[11px] c-text-2 mb-1.5">Bloquear mercado entero (sin ir cuota a cuota):</div>
                 <div className="flex flex-wrap gap-1.5">
                   {[...GRUPOS_MERCADO_BASE, ...(partido.mercadosCustom || []).map((c) => c.mercado)].map((grupo) => {
@@ -2683,30 +2718,36 @@ export default function CasaApuestasPingpong() {
               <p className="text-[10px] c-text-2 mt-1">Parciales: 7-0, 9-1, 11-2 o que el rival no pase de 2 (ej. 21-2). Normal: Terminar a 21 con el rival haciendo entre 3 y 19. Ajustado: 22-20, 23-21...</p>
             </Panel>
 
-            {!modoEspectador && partido.apuestas.length > 0 && (
-              <Panel icon={Ticket} titulo={`Apuestas de esta mesa (${partido.apuestas.length})`}>
-                <div className="space-y-1">
-                  {partido.apuestas.map((ap) => (
-                    <div key={ap.id} className="flex items-center justify-between text-xs border-b c-bd-2 pb-1 c-text-3 hover:bg-black/5 transition-all p-1.5 -mx-1.5 rounded-md">
-                      <div onClick={() => setDetalleApuestaVisible(ap)} className="flex-1 flex items-center gap-1.5 min-w-0 cursor-pointer">
-                        <Avatar name={ap.bettor} size={16} />
-                        <span className="font-semibold">{ap.bettor}</span>
-                        <span className="truncate opacity-80">· {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
+            {(() => {
+              const apuestasVisibles = modoEspectador
+                ? partido.apuestas.filter((ap) => ap.bettor === identidadActual)
+                : partido.apuestas;
+              if (apuestasVisibles.length === 0) return null;
+              return (
+                <Panel icon={Ticket} titulo={modoEspectador ? `Tus apuestas en esta mesa (${apuestasVisibles.length})` : `Apuestas de esta mesa (${apuestasVisibles.length})`}>
+                  <div className="space-y-1">
+                    {apuestasVisibles.map((ap) => (
+                      <div key={ap.id} className="flex items-center justify-between text-xs border-b c-bd-2 pb-1 c-text-3 hover:bg-black/5 transition-all p-1.5 -mx-1.5 rounded-md">
+                        <div onClick={() => setDetalleApuestaVisible(ap)} className="flex-1 flex items-center gap-1.5 min-w-0 cursor-pointer">
+                          <Avatar name={ap.bettor} size={16} />
+                          <span className="font-semibold">{ap.bettor}</span>
+                          <span className="truncate opacity-80">· {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold c-text-orange shrink-0">{ap.stake.toFixed(2)} × {ap.cuota.toFixed(2)}</span>
+                          {!modoEspectador && (
+                             <button onClick={() => solicitarAccionProtegida("anular_apuesta", ap.id)} className="c-text-red2 hover:c-bg-red-soft p-1 rounded transition-colors" title="Anular apuesta">
+                                <Trash2 size={14} />
+                             </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold c-text-orange shrink-0">{ap.stake.toFixed(2)} × {ap.cuota.toFixed(2)}</span>
-                        {!modoEspectador && (
-                           <button onClick={() => solicitarAccionProtegida("anular_apuesta", ap.id)} className="c-text-red2 hover:c-bg-red-soft p-1 rounded transition-colors" title="Anular apuesta">
-                              <Trash2 size={14} />
-                           </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="text-[10px] c-text-4 text-center mt-2">Pincha en el texto de cualquier apuesta para ver el detalle de la papeleta.</div>
-              </Panel>
-            )}
+                    ))}
+                  </div>
+                  <div className="text-[10px] c-text-4 text-center mt-2">Pincha en el texto de cualquier apuesta para ver el detalle de la papeleta.</div>
+                </Panel>
+              );
+            })()}
 
             {!modoEspectador && (
               <Panel icon={Check} titulo="Registrar resultado final">
@@ -2972,16 +3013,22 @@ export default function CasaApuestasPingpong() {
                         <span key={n}>{i > 0 && ", "}{n} {antes.toFixed(0)}→{p.ratingsDespues[n].toFixed(0)}</span>
                       ))}
                     </div>
-                    {!modoEspectador && (p.apuestas || []).length > 0 && (
-                      <div className="pt-1 space-y-0.5">
-                        {(p.apuestas || []).map((ap) => (
-                          <div key={ap.id} onClick={() => setDetalleApuestaVisible(ap)} className={`text-xs flex justify-between p-1.5 -mx-1.5 rounded-md cursor-pointer hover:bg-black/5 active:scale-[0.98] transition-all ${ap.estado === "ganada" ? "c-text-green" : "c-text-red2"}`}>
-                            <span className="truncate pr-2 font-medium">{ap.bettor} · {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
-                            <span className="font-bold shrink-0">{ap.estado === "ganada" ? `+${(ap.stake * ap.cuota).toFixed(2)}` : `-${ap.stake.toFixed(2)}`}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {(() => {
+                      const apuestasHistVisibles = modoEspectador
+                        ? (p.apuestas || []).filter((ap) => ap.bettor === identidadActual)
+                        : (p.apuestas || []);
+                      if (apuestasHistVisibles.length === 0) return null;
+                      return (
+                        <div className="pt-1 space-y-0.5">
+                          {apuestasHistVisibles.map((ap) => (
+                            <div key={ap.id} onClick={() => setDetalleApuestaVisible(ap)} className={`text-xs flex justify-between p-1.5 -mx-1.5 rounded-md cursor-pointer hover:bg-black/5 active:scale-[0.98] transition-all ${ap.estado === "ganada" ? "c-text-green" : "c-text-red2"}`}>
+                              <span className="truncate pr-2 font-medium">{ap.bettor} · {ap.tipo === "combinada" ? `Combinada (${ap.patas.length})` : `${ap.mercado} · ${ap.seleccion}`}</span>
+                              <span className="font-bold shrink-0">{ap.estado === "ganada" ? `+${(ap.stake * ap.cuota).toFixed(2)}` : `-${ap.stake.toFixed(2)}`}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </Panel>
                 );
               })
@@ -3000,7 +3047,7 @@ export default function CasaApuestasPingpong() {
         </button>
       )}
 
-      <div className="fixed bottom-0 inset-x-0 z-40 c-bg-white-95 backdrop-blur border-t c-bd-mesa-40 flex justify-around py-2 px-2">
+      <div className="fixed bottom-0 inset-x-0 z-40 c-bg-white-95 backdrop-blur border-t c-bd-mesa-40 flex justify-around py-2 px-2 ios-safe-bottom">
         {TABS.map((t) => {
           const activo = tab === t.id;
           return (
@@ -3032,7 +3079,7 @@ export default function CasaApuestasPingpong() {
               <p className="text-sm c-text-2">La cesta está vacía.</p>
             ) : (
               <div className="space-y-2">
-                {slip.length >= 2 && (
+                {slip.length >= 2 && !partido.combinadasDesactivadas && (
                   <div className="flex rounded-lg overflow-hidden border c-bd-1 text-sm font-semibold shadow-sm">
                     <button onClick={() => setModoSlip("simples")} className={`flex-1 py-1.5 ${modoSlip === "simples" ? "c-bg-orange c-text-dark-on-accent" : "c-bg-app c-text-2"}`}>Simples</button>
                     <button onClick={() => setModoSlip("combinada")} className={`flex-1 py-1.5 ${modoSlip === "combinada" ? "c-bg-orange c-text-dark-on-accent" : "c-bg-app c-text-2"}`}>SGP (Combinada)</button>
@@ -3122,24 +3169,57 @@ export default function CasaApuestasPingpong() {
 
       {editandoPartido && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditandoPartido(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
-            <div className="font-bold c-text-1">Editar partido</div>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1 max-h-[85vh] overflow-y-auto">
+            <div className="font-bold c-text-1">Editar partido: {editandoPartido.aLabel} vs {editandoPartido.bLabel}</div>
             <div className="grid grid-cols-2 gap-2">
-              <input inputMode="numeric" placeholder="Puntos A" value={editandoPartido.pa} onChange={(e) => setEditandoPartido({ ...editandoPartido, pa: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
-              <input inputMode="numeric" placeholder="Puntos B" value={editandoPartido.pb} onChange={(e) => setEditandoPartido({ ...editandoPartido, pb: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
+              <div>
+                <div className="text-[10px] c-text-2 mb-1">{editandoPartido.aLabel}</div>
+                <input inputMode="numeric" placeholder="Puntos" value={editandoPartido.pa} onChange={(e) => setEditandoPartido({ ...editandoPartido, pa: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
+              </div>
+              <div>
+                <div className="text-[10px] c-text-2 mb-1">{editandoPartido.bLabel}</div>
+                <input inputMode="numeric" placeholder="Puntos" value={editandoPartido.pb} onChange={(e) => setEditandoPartido({ ...editandoPartido, pb: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm text-center c-text-1" />
+              </div>
             </div>
-            <input placeholder="Hora (ej. 21:00)" value={editandoPartido.hora} onChange={(e) => setEditandoPartido({ ...editandoPartido, hora: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
-            <div className="grid grid-cols-2 gap-2">
-              <input placeholder="Lado A" value={editandoPartido.ladoA} onChange={(e) => setEditandoPartido({ ...editandoPartido, ladoA: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
-              <input placeholder="Lado B" value={editandoPartido.ladoB} onChange={(e) => setEditandoPartido({ ...editandoPartido, ladoB: e.target.value })} className="rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
+
+            <div className="rounded-lg c-bg-app border c-bd-1 p-2.5 space-y-2">
+              <div className="text-[10px] font-bold uppercase tracking-wide c-text-2">Condiciones del partido</div>
+              <div className="flex items-center gap-2">
+                <Clock size={14} className="c-text-2" />
+                <input type="time" value={editandoPartido.hora} onChange={(e) => setEditandoPartido({ ...editandoPartido, hora: e.target.value })} style={{ colorScheme: "light" }} className="rounded-lg border c-bd-1 c-bg-white p-1.5 text-sm c-text-1 flex-1" />
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="c-text-2 text-xs">{editandoPartido.aLabel} jugaba en:</span>
+                <div className="flex rounded-lg overflow-hidden border c-bd-1">
+                  {["Canasta", "Columpios"].map((lado) => (
+                    <button key={lado} onClick={() => setEditandoPartido({ ...editandoPartido, ladoA: lado, ladoB: lado === "Canasta" ? "Columpios" : "Canasta" })} className={`px-2.5 py-1 text-xs font-semibold ${editandoPartido.ladoA === lado ? "c-bg-orange c-text-dark-on-accent" : "c-bg-white c-text-2"}`}>{lado}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="text-xs c-text-2">{editandoPartido.bLabel} jugaba en <b className="c-text-1">{editandoPartido.ladoB}</b></div>
+              <div className="flex gap-3 pt-1 flex-wrap items-center">
+                <label className="flex items-center gap-1.5 text-xs c-text-2">
+                  <input type="checkbox" checked={!!editandoPartido.solLado} onChange={(e) => setEditandoPartido({ ...editandoPartido, solLado: e.target.checked ? "Canasta" : null })} />
+                  <Sun size={13} /> Había sol molestando
+                </label>
+                {editandoPartido.solLado && (
+                  <div className="flex rounded-lg overflow-hidden border c-bd-1">
+                    {["Canasta", "Columpios"].map((lado) => (
+                      <button key={lado} onClick={() => setEditandoPartido({ ...editandoPartido, solLado: lado })} className={`px-2 py-1 text-[11px] font-semibold ${editandoPartido.solLado === lado ? "c-bg-gold c-text-dark-on-accent" : "c-bg-white c-text-2"}`}>{lado}</button>
+                    ))}
+                  </div>
+                )}
+                <label className="flex items-center gap-1.5 text-xs c-text-2">
+                  <input type="checkbox" checked={editandoPartido.viento} onChange={(e) => setEditandoPartido({ ...editandoPartido, viento: e.target.checked })} />
+                  <Wind size={13} /> Hacía viento
+                </label>
+              </div>
+              <label className="flex items-center gap-1.5 text-xs c-text-2 pt-1">
+                <input type="checkbox" checked={editandoPartido.esGM} onChange={(e) => setEditandoPartido({ ...editandoPartido, esGM: e.target.checked })} />
+                <Crown size={13} /> Era partido de título (Gran Maestría)
+              </label>
             </div>
-            <input placeholder="Sol molestaba en el lado... (o vacío)" value={editandoPartido.solLado} onChange={(e) => setEditandoPartido({ ...editandoPartido, solLado: e.target.value })} className="w-full rounded-lg border c-bd-1 c-bg-app p-2 text-sm c-text-1" />
-            <label className="flex items-center gap-2 text-sm c-text-2">
-              <input type="checkbox" checked={editandoPartido.viento} onChange={(e) => setEditandoPartido({ ...editandoPartido, viento: e.target.checked })} /> Hacía viento
-            </label>
-            <label className="flex items-center gap-2 text-sm c-text-2">
-              <input type="checkbox" checked={editandoPartido.esGM} onChange={(e) => setEditandoPartido({ ...editandoPartido, esGM: e.target.checked })} /> Era partido de título (Gran Maestría)
-            </label>
+
             {error && <div className="text-xs c-text-red2">{error}</div>}
             <div className="text-[10px] c-text-2">Al guardar se recalculan los ratings y el título desde este partido en adelante.</div>
             <div className="flex gap-2 pt-1">

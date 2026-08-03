@@ -1,3 +1,38 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html, body {
+  height: 100%;
+  /* Evita el "rebote" de scroll de iOS, que es lo que hace que la barra
+     inferior fixed parezca subir/moverse al hacer scroll en la app
+     instalada en la pantalla de inicio. */
+  overscroll-behavior-y: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+/* Deja hueco para la zona segura de abajo (home indicator) en iPhone,
+   para que la barra de navegación fixed no quede tapada ni "flote". */
+.ios-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@keyframes splash-logo-in {
+  0% { transform: scale(0.6) rotate(-8deg); opacity: 0; }
+  60% { transform: scale(1.08) rotate(2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+.c-anim-splash-logo {
+  animation: splash-logo-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes splash-title-in {
+  0% { transform: translateY(8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.c-anim-splash-title {
+  animation: splash-title-in 0.6s ease-out 0.35s both;
+}
