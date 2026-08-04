@@ -1402,7 +1402,7 @@ export default function CasaApuestasPingpong() {
   const [mostrarSplash, setMostrarSplash] = useState(true);
 
   useEffect(() => {
-    const t = setTimeout(() => setMostrarSplash(false), 1400);
+    const t = setTimeout(() => setMostrarSplash(false), 3100);
     return () => clearTimeout(t);
   }, []);
   const [tab, setTab] = useState("partido");
@@ -1453,7 +1453,6 @@ export default function CasaApuestasPingpong() {
       setCelebracion({ nombre: identidadActual, tipo: "apuestaGanada" });
     }
   }, [estado?.historial, identidadActual]);
-  const [confirmRecargarHistorial, setConfirmRecargarHistorial] = useState(false);
   const [previsualizacion, setPrevisualizacion] = useState(null);
   const [modoEspectador, setModoEspectador] = useState(true);
   const [pidiendoPassword, setPidiendoPassword] = useState(false);
@@ -1580,10 +1579,27 @@ export default function CasaApuestasPingpong() {
 
   if (mostrarSplash) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center c-bg-app c-anim-fadein-2">
-        <img src="/logo.png" alt="Pino-Pong" className="w-28 h-28 c-anim-splash-logo" />
-        <div style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.06em" }} className="text-3xl c-text-1 mt-4 c-anim-splash-title">
-          <span className="c-text-orange">PINO-PONG</span>
+      <div className="min-h-screen flex items-center justify-center c-bg-app overflow-hidden">
+        <div className="relative w-full c-anim-splash-fadeout" style={{ height: 110 }}>
+          <img
+            src="/logo.png"
+            alt="Pino-Pong"
+            className="absolute c-anim-splash-logo2"
+            style={{ left: "50%", top: "50%", width: 88, height: 88 }}
+          />
+          <div
+            className="absolute c-anim-splash-text2"
+            style={{
+              left: "50%", top: "50%",
+              fontFamily: "'Bebas Neue', sans-serif",
+              letterSpacing: "0.05em",
+              fontSize: 42,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span style={{ color: "#0E6E4E" }}>INO</span>
+            <span style={{ color: "#FF5A1F" }}>-PONG</span>
+          </div>
         </div>
       </div>
     );
@@ -2190,11 +2206,6 @@ export default function CasaApuestasPingpong() {
     setEditandoPartido(null);
   }
 
-  async function recargarHistorialReal() {
-    await persistir(construirEstadoDesdeHistorialReal());
-    setConfirmRecargarHistorial(false);
-  }
-
   function handleSubirCSV(e) {
     const archivo = e.target.files && e.target.files[0];
     e.target.value = ""; // permite volver a subir el mismo archivo si hace falta
@@ -2443,11 +2454,6 @@ export default function CasaApuestasPingpong() {
             <button onClick={() => (modoEspectador ? pedirModoBoss() : pasarAEspectador())} title="Modo espectador / boss" className={modoEspectador ? "c-text-orange" : "c-text-2 hover:c-text-1 transition-colors"}>
               {modoEspectador ? <Eye size={16} /> : <EyeOff size={16} />}
             </button>
-            {!modoEspectador && (
-              <button onClick={() => setConfirmRecargarHistorial(true)} title="Recargar historial real" className="c-text-2 hover:c-text-1 transition-colors">
-                <History size={16} />
-              </button>
-            )}
           </div>
         </div>
         <div className="c-red-net h-[3px] w-full mt-3 rounded-full opacity-70" />
@@ -3224,17 +3230,6 @@ export default function CasaApuestasPingpong() {
       )}
       
       <ModalDetalleApuesta apuesta={detalleApuestaVisible} onCerrar={() => setDetalleApuestaVisible(null)} />
-
-      {confirmRecargarHistorial && (
-        <ModalConfirmar
-          titulo="¿Recargar el historial real?"
-          mensaje="Esto sustituye jugadores, ratings, fichas e historial actuales por los 100 partidos reales guardados en la app (dobles excluidos). Cualquier partido o apuesta en curso se perderá. No se puede deshacer."
-          onCancelar={() => setConfirmRecargarHistorial(false)}
-          onConfirmar={recargarHistorialReal}
-          textoConfirmar="Recargar historial"
-          peligro
-        />
-      )}
 
       {editandoPartido && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditandoPartido(null)}>

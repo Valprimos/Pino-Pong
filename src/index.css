@@ -28,18 +28,27 @@ input, select, textarea {
   font-size: 16px !important;
 }
 
-@keyframes splash-logo-in {
-  0% { transform: scale(0.6) rotate(-8deg); opacity: 0; }
-  60% { transform: scale(1.08) rotate(2deg); opacity: 1; }
-  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+@keyframes splash-logo-move2 {
+  0% { transform: translate(-50%, -50%) scale(1.15); opacity: 0; }
+  18% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  50% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  78% { transform: translate(calc(-50% - 84px), -50%) scale(0.78); opacity: 1; }
+  100% { transform: translate(calc(-50% - 84px), -50%) scale(0.78); opacity: 1; }
 }
-.c-anim-splash-logo {
-  animation: splash-logo-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+.c-anim-splash-logo2 {
+  animation: splash-logo-move2 1.9s cubic-bezier(0.65, 0, 0.35, 1) both;
 }
-@keyframes splash-title-in {
-  0% { transform: translateY(8px); opacity: 0; }
-  100% { transform: translateY(0); opacity: 1; }
+@keyframes splash-text-in2 {
+  0%, 55% { opacity: 0; transform: translate(calc(-50% + 78px), -50%); filter: blur(2px); }
+  100% { opacity: 1; transform: translate(calc(-50% + 42px), -50%); filter: blur(0); }
 }
-.c-anim-splash-title {
-  animation: splash-title-in 0.6s ease-out 0.35s both;
+.c-anim-splash-text2 {
+  animation: splash-text-in2 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.35s both;
+}
+@keyframes splash-fadeout2 {
+  0%, 84% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.c-anim-splash-fadeout {
+  animation: splash-fadeout2 3.1s ease-in both;
 }
