@@ -1402,7 +1402,7 @@ export default function CasaApuestasPingpong() {
   const [mostrarSplash, setMostrarSplash] = useState(true);
 
   useEffect(() => {
-    const t = setTimeout(() => setMostrarSplash(false), 3100);
+    const t = setTimeout(() => setMostrarSplash(false), 2000);
     return () => clearTimeout(t);
   }, []);
   const [tab, setTab] = useState("partido");
@@ -1584,21 +1584,9 @@ export default function CasaApuestasPingpong() {
           <img
             src="/logo.png"
             alt="Pino-Pong"
-            className="absolute c-anim-splash-logo2 splash-logo-img"
+            className="absolute c-anim-splash-logo-simple splash-logo-img"
             style={{ left: "50%", top: "50%" }}
           />
-          <div
-            className="absolute c-anim-splash-text2 splash-text-el"
-            style={{
-              top: "50%",
-              fontFamily: "'Bebas Neue', sans-serif",
-              letterSpacing: "0.05em",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <span style={{ color: "#0E6E4E" }}>INO</span>
-            <span style={{ color: "#FF5A1F" }}>-PONG</span>
-          </div>
         </div>
       </div>
     );
