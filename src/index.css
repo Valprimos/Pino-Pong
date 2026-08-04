@@ -21,6 +21,13 @@ html, body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* iOS hace zoom automático al enfocar un campo con letra menor de 16px, y
+   luego a veces no vuelve a su tamaño original al cerrar el teclado. Forzamos
+   16px en todos los campos para que nunca llegue a hacer zoom. */
+input, select, textarea {
+  font-size: 16px !important;
+}
+
 @keyframes splash-logo-in {
   0% { transform: scale(0.6) rotate(-8deg); opacity: 0; }
   60% { transform: scale(1.08) rotate(2deg); opacity: 1; }

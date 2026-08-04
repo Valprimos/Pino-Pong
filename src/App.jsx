@@ -1422,6 +1422,8 @@ export default function CasaApuestasPingpong() {
   });
   const [modalLogin, setModalLogin] = useState(null); // { nombreSel, passwordInput, error }
   const [modalCuentas, setModalCuentas] = useState(false);
+  const [modalMiCuenta, setModalMiCuenta] = useState(false);
+  const miCuentaFotoInputRef = useRef(null);
   const [nuevoApostadorNombre, setNuevoApostadorNombre] = useState("");
   const [nuevoApostadorFichas, setNuevoApostadorFichas] = useState("500");
   const [modoSlip, setModoSlip] = useState("simples");
@@ -2421,7 +2423,7 @@ export default function CasaApuestasPingpong() {
 
       {celebracion && <Confeti nombre={celebracion.nombre} tipo={celebracion.tipo} onFin={() => setCelebracion(null)} />}
 
-      <div className="sticky top-0 z-30 c-bg-white-95 backdrop-blur px-4 pt-4 pb-3">
+      <div className="sticky top-0 z-30 c-bg-white-95 backdrop-blur px-4 pb-3" style={{ paddingTop: "calc(1rem + env(safe-area-inset-top, 0px))" }}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-2xl inline-block" style={{ animation: "rebote 2.2s ease-in-out infinite" }}>🏓</span>
@@ -2430,7 +2432,7 @@ export default function CasaApuestasPingpong() {
             </h1>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={identidadActual ? cerrarSesion : abrirLogin} title={identidadActual ? "Cerrar sesión" : "Iniciar sesión"} className="text-xs font-semibold c-text-2 hover:c-text-1 transition-colors">
+            <button onClick={identidadActual ? () => setModalMiCuenta(true) : abrirLogin} title={identidadActual ? "Mi cuenta" : "Iniciar sesión"} className="text-xs font-semibold c-text-2 hover:c-text-1 transition-colors">
               {identidadActual ? `👤 ${identidadActual}` : "👤 login"}
             </button>
             {!modoEspectador && (
@@ -3311,6 +3313,22 @@ export default function CasaApuestasPingpong() {
               <button onClick={() => setModalLogin(null)} className="flex-1 rounded-lg border c-bd-1 c-text-2 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={intentarLogin} className="flex-1 rounded-lg c-bg-orange c-text-1 py-2 text-sm font-bold">Entrar</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {modalMiCuenta && identidadActual && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalMiCuenta(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="c-bg-white rounded-xl p-4 w-full max-w-xs space-y-3 border c-bd-1">
+            <div className="flex items-center gap-3">
+              <Avatar name={identidadActual} size={40} />
+              <div className="font-bold c-text-1 text-lg">{identidadActual}</div>
+            </div>
+            <input ref={miCuentaFotoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) subirFotoPerfil(identidadActual, f); e.target.value = ""; }} />
+            <button onClick={() => miCuentaFotoInputRef.current?.click()} className="w-full rounded-lg border c-bd-1 c-text-1 py-2 text-sm font-semibold text-left px-3">📷 Cambiar foto de perfil</button>
+            <button onClick={() => { setModalMiCuenta(false); setPerfilAbierto(identidadActual); }} className="w-full rounded-lg border c-bd-1 c-text-1 py-2 text-sm font-semibold text-left px-3">📊 Ver mi perfil</button>
+            <button onClick={() => { setModalMiCuenta(false); cerrarSesion(); }} className="w-full rounded-lg border c-bd-red-50 c-text-red2 py-2 text-sm font-semibold text-left px-3">🚪 Cerrar sesión</button>
+            <button onClick={() => setModalMiCuenta(false)} className="w-full rounded-lg c-text-2 py-2 text-sm font-semibold">Cancelar</button>
           </div>
         </div>
       )}
