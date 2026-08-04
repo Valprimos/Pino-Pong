@@ -38,7 +38,7 @@ input, select, textarea {
   --splash-logo-end-scale: 0.27;
   --splash-shift: -58px;
   --splash-text-size: 46px;
-  --splash-text-offset: 34px;
+  --splash-text-left: -18px;
 }
 @media (min-width: 768px) {
   :root {
@@ -46,7 +46,7 @@ input, select, textarea {
     --splash-logo-end-scale: 0.19;
     --splash-shift: -110px;
     --splash-text-size: 92px;
-    --splash-text-offset: 64px;
+    --splash-text-left: -46px;
   }
 }
 
@@ -56,6 +56,8 @@ input, select, textarea {
 }
 .splash-text-el {
   font-size: var(--splash-text-size);
+  left: calc(50% + var(--splash-text-left));
+  text-align: left;
 }
 
 @keyframes splash-logo-move2 {
@@ -69,8 +71,8 @@ input, select, textarea {
   animation: splash-logo-move2 1.9s cubic-bezier(0.65, 0, 0.35, 1) both;
 }
 @keyframes splash-text-in2 {
-  0%, 55% { opacity: 0; transform: translate(calc(-50% + var(--splash-text-offset) + 34px), -50%); filter: blur(2px); }
-  100% { opacity: 1; transform: translate(calc(-50% + var(--splash-text-offset)), -50%); filter: blur(0); }
+  0%, 55% { opacity: 0; transform: translateY(-50%) translateX(30px); filter: blur(2px); }
+  100% { opacity: 1; transform: translateY(-50%) translateX(0); filter: blur(0); }
 }
 .c-anim-splash-text2 {
   animation: splash-text-in2 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.35s both;

@@ -1590,7 +1590,7 @@ export default function CasaApuestasPingpong() {
           <div
             className="absolute c-anim-splash-text2 splash-text-el"
             style={{
-              left: "50%", top: "50%",
+              top: "50%",
               fontFamily: "'Bebas Neue', sans-serif",
               letterSpacing: "0.05em",
               whiteSpace: "nowrap",
