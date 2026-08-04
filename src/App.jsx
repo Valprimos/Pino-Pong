@@ -1585,7 +1585,7 @@ export default function CasaApuestasPingpong() {
             src="/logo.png"
             alt="Pino-Pong"
             className="absolute c-anim-splash-logo2"
-            style={{ left: "50%", top: "50%", width: 88, height: 88 }}
+            style={{ left: "50%", top: "50%", width: 150, height: 150 }}
           />
           <div
             className="absolute c-anim-splash-text2"
