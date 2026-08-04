@@ -1580,20 +1580,19 @@ export default function CasaApuestasPingpong() {
   if (mostrarSplash) {
     return (
       <div className="min-h-screen flex items-center justify-center c-bg-app overflow-hidden">
-        <div className="relative w-full c-anim-splash-fadeout" style={{ height: 110 }}>
+        <div className="relative w-full c-anim-splash-fadeout" style={{ height: 260 }}>
           <img
             src="/logo.png"
             alt="Pino-Pong"
-            className="absolute c-anim-splash-logo2"
-            style={{ left: "50%", top: "50%", width: 150, height: 150 }}
+            className="absolute c-anim-splash-logo2 splash-logo-img"
+            style={{ left: "50%", top: "50%" }}
           />
           <div
-            className="absolute c-anim-splash-text2"
+            className="absolute c-anim-splash-text2 splash-text-el"
             style={{
               left: "50%", top: "50%",
               fontFamily: "'Bebas Neue', sans-serif",
               letterSpacing: "0.05em",
-              fontSize: 42,
               whiteSpace: "nowrap",
             }}
           >

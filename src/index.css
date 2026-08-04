@@ -28,19 +28,49 @@ input, select, textarea {
   font-size: 16px !important;
 }
 
+/* Tamaños de la animación inicial: por defecto (móvil) el logo grande de
+   entrada, luego se encoge a icono pequeño mientras el texto "-PONG" aparece
+   MUY pegado a él. En pantallas más anchas (ordenador) el logo de entrada es
+   aún mayor, el texto final es mucho más grande, y queda algo más separado
+   del logo. */
+:root {
+  --splash-logo-start: 260px;
+  --splash-logo-end-scale: 0.27;
+  --splash-shift: -58px;
+  --splash-text-size: 46px;
+  --splash-text-offset: 34px;
+}
+@media (min-width: 768px) {
+  :root {
+    --splash-logo-start: 420px;
+    --splash-logo-end-scale: 0.19;
+    --splash-shift: -110px;
+    --splash-text-size: 92px;
+    --splash-text-offset: 64px;
+  }
+}
+
+.splash-logo-img {
+  width: var(--splash-logo-start);
+  height: var(--splash-logo-start);
+}
+.splash-text-el {
+  font-size: var(--splash-text-size);
+}
+
 @keyframes splash-logo-move2 {
-  0% { transform: translate(-50%, -50%) scale(1.08); opacity: 0; }
+  0% { transform: translate(-50%, -50%) scale(1.06); opacity: 0; }
   18% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
   50% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-  78% { transform: translate(calc(-50% - 90px), -50%) scale(0.46); opacity: 1; }
-  100% { transform: translate(calc(-50% - 90px), -50%) scale(0.46); opacity: 1; }
+  78% { transform: translate(calc(-50% + var(--splash-shift)), -50%) scale(var(--splash-logo-end-scale)); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--splash-shift)), -50%) scale(var(--splash-logo-end-scale)); opacity: 1; }
 }
 .c-anim-splash-logo2 {
   animation: splash-logo-move2 1.9s cubic-bezier(0.65, 0, 0.35, 1) both;
 }
 @keyframes splash-text-in2 {
-  0%, 55% { opacity: 0; transform: translate(calc(-50% + 78px), -50%); filter: blur(2px); }
-  100% { opacity: 1; transform: translate(calc(-50% + 42px), -50%); filter: blur(0); }
+  0%, 55% { opacity: 0; transform: translate(calc(-50% + var(--splash-text-offset) + 34px), -50%); filter: blur(2px); }
+  100% { opacity: 1; transform: translate(calc(-50% + var(--splash-text-offset)), -50%); filter: blur(0); }
 }
 .c-anim-splash-text2 {
   animation: splash-text-in2 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.35s both;
