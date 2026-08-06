@@ -4,7 +4,6 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, onValue, set as dbSet } from "firebase/database";
 import { firebaseConfig } from "./firebaseConfig";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import html2canvas from "html2canvas";
 
 // --- SINCRONIZACIÓN EN LA NUBE (Firebase) ---
 // Esto hace que todos los amigos vean los mismos datos en tiempo real,
@@ -589,29 +588,6 @@ function construirSerieElo(historial) {
     serie.push({ partido: i + 1, ...ultimos });
   });
   return { serie, nombres: Array.from(nombres) };
-}
-
-function construirResumenTemporada(estado) {
-  const historial = estado.historial || [];
-  const ranking = Object.entries(estado.jugadores || {}).sort((a, b) => b[1] - a[1]);
-  const top5 = ranking.slice(0, 5);
-  const totalPartidos = historial.filter((p) => p.teamA?.length === 1 && p.teamB?.length === 1).length;
-
-  let mejorActiva = { nombre: null, valor: 0 };
-  let mejorHistorica = { nombre: null, valor: 0 };
-  ranking.forEach(([n]) => {
-    const activa = calcularRacha(historial, n);
-    if (activa > mejorActiva.valor) mejorActiva = { nombre: n, valor: activa };
-    const historica = calcularRachaMaxima(historial, n);
-    if (historica > mejorHistorica.valor) mejorHistorica = { nombre: n, valor: historica };
-  });
-
-  return {
-    top5, totalPartidos, mejorActiva, mejorHistorica,
-    gm: estado.gm,
-    estilo: calcularRankingEstilo(historial),
-    fecha: new Date().toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" }),
-  };
 }
 
 function calcularRachaMaxima(historial, nombre) {
@@ -1569,8 +1545,6 @@ export default function CasaApuestasPingpong() {
   const prevSlipLen = useRef(0);
   const csvInputRef = useRef(null);
   const [csvImportMsg, setCsvImportMsg] = useState(null); // { tipo: "ok"|"error", texto }
-  const [modalResumen, setModalResumen] = useState(false);
-  const resumenRef = useRef(null);
   const [editandoPartido, setEditandoPartido] = useState(null);
   const ultimoSincronizado = useRef(null);
 
@@ -2310,18 +2284,6 @@ export default function CasaApuestasPingpong() {
     reader.readAsText(archivo, "utf-8");
   }
 
-  async function descargarResumenTemporada() {
-    if (!resumenRef.current) return;
-    const canvas = await html2canvas(resumenRef.current, { backgroundColor: "#14161c", scale: 2, useCORS: true });
-    const dataUrl = canvas.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = dataUrl;
-    a.download = `pino-pong-resumen-${new Date().toISOString().slice(0, 10)}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-
   // --- DERIVACIÓN DE DATOS PARA LA VISTA ---
   let pA_punto = null, mercados = null, ctxPartido = null;
 
@@ -2638,6 +2600,26 @@ export default function CasaApuestasPingpong() {
                     Es partido por la Gran Maestría
                   </label>
                 )}
+
+                {selA && selB && selA !== selB && (() => {
+                  const historialCompleto = estado.historial || [];
+                  const individuales = historialCompleto.filter((p) => p.teamA?.length === 1 && p.teamB?.length === 1);
+                  const h2h = individuales.filter((p) =>
+                    (p.teamA[0] === selA && p.teamB[0] === selB) || (p.teamA[0] === selB && p.teamB[0] === selA));
+                  const victoriasA = h2h.filter((p) => p.ganador === selA).length;
+                  const victoriasB = h2h.filter((p) => p.ganador === selB).length;
+                  const mismosCampos = h2h.filter((p) =>
+                    (p.teamA[0] === selA && p.ladoA === ladoAInput && p.ladoB === ladoBAuto) ||
+                    (p.teamA[0] === selB && p.ladoA === ladoBAuto && p.ladoB === ladoAInput));
+                  return (
+                    <div className="rounded-lg c-bg-app border c-bd-1 p-2.5 text-xs c-text-2 space-y-1">
+                      <div className="flex justify-between"><span>Enfrentamientos {selA} vs {selB}</span><b className="c-text-1">{h2h.length} ({victoriasA}-{victoriasB})</b></div>
+                      <div className="flex justify-between"><span>Con estos mismos campos</span><b className="c-text-1">{mismosCampos.length}</b></div>
+                      <div className="flex justify-between"><span>Total en el historial</span><b className="c-text-1">{individuales.length}</b></div>
+                    </div>
+                  );
+                })()}
+
                 <button onClick={revisarCuotas} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent font-bold py-2.5 flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
                   <Plus size={16} /> Revisar cuotas antes de publicar
                 </button>
@@ -2684,15 +2666,19 @@ export default function CasaApuestasPingpong() {
               </div>
             )}
 
-            {!modoEspectador && !enPrevisualizacion && (
+            {!modoEspectador && (
               <Panel icon={Ban} titulo="Control de la mesa">
-                <button onClick={toggleApuestasCerradas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.apuestasCerradas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-green-soft c-text-green-dark border c-bd-green-50"}`}>
-                  {partido.apuestasCerradas ? "🔒 Apuestas cerradas — pulsa para reabrir" : "🟢 Apuestas abiertas — pulsa para cerrar"}
-                </button>
-                <button onClick={toggleCombinadasDesactivadas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.combinadasDesactivadas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-app c-text-2 border c-bd-1"}`}>
-                  {partido.combinadasDesactivadas ? "🚫 Combinadas desactivadas — pulsa para activarlas" : "Combinadas activas — pulsa para desactivarlas"}
-                </button>
-                <div className="text-[11px] c-text-2 mb-1.5">Bloquear mercado entero (sin ir cuota a cuota):</div>
+                {!enPrevisualizacion && (
+                  <>
+                    <button onClick={toggleApuestasCerradas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.apuestasCerradas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-green-soft c-text-green-dark border c-bd-green-50"}`}>
+                      {partido.apuestasCerradas ? "🔒 Apuestas cerradas — pulsa para reabrir" : "🟢 Apuestas abiertas — pulsa para cerrar"}
+                    </button>
+                    <button onClick={toggleCombinadasDesactivadas} className={`w-full rounded-lg font-bold py-2 text-sm mb-2 ${partido.combinadasDesactivadas ? "c-bg-red-soft c-text-red2 border c-bd-red-50" : "c-bg-app c-text-2 border c-bd-1"}`}>
+                      {partido.combinadasDesactivadas ? "🚫 Combinadas desactivadas — pulsa para activarlas" : "Combinadas activas — pulsa para desactivarlas"}
+                    </button>
+                  </>
+                )}
+                <div className="text-[11px] c-text-2 mb-1.5">Bloquear mercado entero (sin ir cuota a cuota){enPrevisualizacion ? " — saldrá ya bloqueado al publicar" : ""}:</div>
                 <div className="flex flex-wrap gap-1.5">
                   {[...GRUPOS_MERCADO_BASE, ...(partido.mercadosCustom || []).map((c) => c.mercado)].map((grupo) => {
                     const bloqueado = (partido.mercadosBloqueados || []).includes(grupo);
@@ -3147,11 +3133,6 @@ export default function CasaApuestasPingpong() {
         {tab === "historial" && (
           <div className="space-y-3">
             {(estado.historial || []).length > 0 && (
-              <button onClick={() => setModalResumen(true)} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent text-sm font-bold py-2.5">
-                📤 Exportar resumen de temporada
-              </button>
-            )}
-            {(estado.historial || []).length > 0 && (
               <button onClick={exportarHistorial} className="w-full rounded-lg border border-dashed c-bd-orange c-text-orange text-sm font-semibold py-2.5 bg-white">
                 ⬇️ Exportar historial a CSV
               </button>
@@ -3447,75 +3428,6 @@ export default function CasaApuestasPingpong() {
           </div>
         </div>
       )}
-
-      {modalResumen && (() => {
-        const resumen = construirResumenTemporada(estado);
-        return (
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setModalResumen(false)}>
-            <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm space-y-3">
-              <div ref={resumenRef} style={{ background: "#14161c", fontFamily: "'Inter', sans-serif" }} className="rounded-2xl p-5 border border-white/10">
-                <div className="text-center mb-4">
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.05em" }} className="text-3xl">
-                    <span style={{ color: "#0E6E4E" }}>PINO</span><span style={{ color: "#FF5A1F" }}>-PONG</span>
-                  </div>
-                  <div className="text-[11px] text-white/50 mt-0.5">Resumen de temporada · {resumen.fecha}</div>
-                </div>
-
-                {resumen.gm && (
-                  <div className="flex items-center justify-center gap-2 mb-4 rounded-xl py-2" style={{ background: "rgba(255,215,120,0.08)" }}>
-                    <Crown size={18} style={{ color: "#FFD778" }} />
-                    <span className="text-white font-bold text-sm">Gran Maestro: {resumen.gm}</span>
-                  </div>
-                )}
-
-                <div className="mb-4">
-                  <div className="text-[10px] uppercase tracking-wide text-white/40 font-bold mb-1.5">Ranking ELO</div>
-                  <div className="space-y-1">
-                    {resumen.top5.map(([n, r], i) => (
-                      <div key={n} className="flex items-center justify-between text-sm">
-                        <span className="text-white/85">{i + 1}. {n}</span>
-                        <span className="font-bold" style={{ color: "#FF5A1F" }}>{r.toFixed(0)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
-                  <div className="rounded-lg p-2 text-center" style={{ background: "rgba(255,255,255,0.05)" }}>
-                    <div className="text-white/50">Partidos jugados</div>
-                    <div className="text-white font-bold text-lg">{resumen.totalPartidos}</div>
-                  </div>
-                  <div className="rounded-lg p-2 text-center" style={{ background: "rgba(255,255,255,0.05)" }}>
-                    <div className="text-white/50">Racha activa</div>
-                    <div className="text-white font-bold text-lg">{resumen.mejorActiva.nombre ? `${resumen.mejorActiva.nombre} (${resumen.mejorActiva.valor})` : "—"}</div>
-                  </div>
-                  <div className="rounded-lg p-2 text-center col-span-2" style={{ background: "rgba(255,255,255,0.05)" }}>
-                    <div className="text-white/50">Racha histórica más larga</div>
-                    <div className="text-white font-bold text-lg">{resumen.mejorHistorica.nombre ? `${resumen.mejorHistorica.nombre} (${resumen.mejorHistorica.valor} victorias)` : "—"}</div>
-                  </div>
-                </div>
-
-                {(resumen.estilo.reyParciales || resumen.estilo.reyDeuce || resumen.estilo.reyCanasta || resumen.estilo.reyColumpios) && (
-                  <div className="space-y-1 text-xs">
-                    <div className="text-[10px] uppercase tracking-wide text-white/40 font-bold mb-1">Estilos</div>
-                    {resumen.estilo.reyParciales && <div className="flex justify-between text-white/80"><span>🥊 Rey de los parciales</span><span className="font-bold text-white">{resumen.estilo.reyParciales[0]}</span></div>}
-                    {resumen.estilo.reyDeuce && <div className="flex justify-between text-white/80"><span>😅 Rey del deuce</span><span className="font-bold text-white">{resumen.estilo.reyDeuce[0]}</span></div>}
-                    {resumen.estilo.reyCanasta && <div className="flex justify-between text-white/80"><span>🧺 Rey de la Canasta</span><span className="font-bold text-white">{resumen.estilo.reyCanasta[0]}</span></div>}
-                    {resumen.estilo.reyColumpios && <div className="flex justify-between text-white/80"><span>🎠 Rey de los Columpios</span><span className="font-bold text-white">{resumen.estilo.reyColumpios[0]}</span></div>}
-                  </div>
-                )}
-
-                <div className="text-center text-[10px] text-white/30 mt-4">Donde se demuestra quién tiene de verdad madera de campeones.</div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => setModalResumen(false)} className="rounded-lg border c-bd-1 c-text-2 bg-white py-2.5 text-sm font-semibold">Cerrar</button>
-                <button onClick={descargarResumenTemporada} className="rounded-lg c-bg-orange c-text-dark-on-accent py-2.5 text-sm font-bold">⬇️ Descargar imagen</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {modalCuentas && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalCuentas(false)}>
