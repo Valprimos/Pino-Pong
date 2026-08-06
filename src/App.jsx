@@ -3,6 +3,8 @@ import { Trophy, Crown, Plus, X, Check, Users, History, Swords, Ticket, RotateCc
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, onValue, set as dbSet } from "firebase/database";
 import { firebaseConfig } from "./firebaseConfig";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import html2canvas from "html2canvas";
 
 // --- SINCRONIZACIÓN EN LA NUBE (Firebase) ---
 // Esto hace que todos los amigos vean los mismos datos en tiempo real,
@@ -563,6 +565,70 @@ function calcularRacha(historial, nombre) {
   return signo ? racha : -racha;
 }
 
+// Construye una serie temporal "ancha" (una columna por jugador) con el ELO
+// tras cada partido en orden cronológico, para pintar la gráfica de
+// evolución. Los jugadores que no jugaron ese partido mantienen su último
+// valor conocido (línea plana), así todas las líneas llegan hasta el final.
+function construirSerieElo(historial) {
+  const cronologico = [...historial].reverse();
+  const nombres = new Set();
+  cronologico.forEach((p) => {
+    if (p.teamA?.length === 1) nombres.add(p.teamA[0]);
+    if (p.teamB?.length === 1) nombres.add(p.teamB[0]);
+  });
+  const ultimos = {};
+  nombres.forEach((n) => { ultimos[n] = RATING_INICIAL; });
+  const serie = [{ partido: 0, ...ultimos }];
+  cronologico.forEach((p, i) => {
+    if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
+    const [a] = p.teamA, [b] = p.teamB;
+    if (p.ratingsDespues) {
+      if (p.ratingsDespues[a] !== undefined) ultimos[a] = Number(p.ratingsDespues[a].toFixed(0));
+      if (p.ratingsDespues[b] !== undefined) ultimos[b] = Number(p.ratingsDespues[b].toFixed(0));
+    }
+    serie.push({ partido: i + 1, ...ultimos });
+  });
+  return { serie, nombres: Array.from(nombres) };
+}
+
+function construirResumenTemporada(estado) {
+  const historial = estado.historial || [];
+  const ranking = Object.entries(estado.jugadores || {}).sort((a, b) => b[1] - a[1]);
+  const top5 = ranking.slice(0, 5);
+  const totalPartidos = historial.filter((p) => p.teamA?.length === 1 && p.teamB?.length === 1).length;
+
+  let mejorActiva = { nombre: null, valor: 0 };
+  let mejorHistorica = { nombre: null, valor: 0 };
+  ranking.forEach(([n]) => {
+    const activa = calcularRacha(historial, n);
+    if (activa > mejorActiva.valor) mejorActiva = { nombre: n, valor: activa };
+    const historica = calcularRachaMaxima(historial, n);
+    if (historica > mejorHistorica.valor) mejorHistorica = { nombre: n, valor: historica };
+  });
+
+  return {
+    top5, totalPartidos, mejorActiva, mejorHistorica,
+    gm: estado.gm,
+    estilo: calcularRankingEstilo(historial),
+    fecha: new Date().toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" }),
+  };
+}
+
+function calcularRachaMaxima(historial, nombre) {
+  const cronologico = [...historial].reverse();
+  let actual = 0, maxima = 0;
+  for (const p of cronologico) {
+    if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) continue;
+    const esA = p.teamA[0] === nombre;
+    const esB = p.teamB[0] === nombre;
+    if (!esA && !esB) continue;
+    const gano = esA ? p.pa > p.pb : p.pb > p.pa;
+    if (gano) { actual++; if (actual > maxima) maxima = actual; }
+    else actual = 0;
+  }
+  return maxima;
+}
+
 function construirPerfilJugador(historial, nombre) {
   const registrosH2H = construirRegistrosH2H(historial);
   const h2h = {};
@@ -578,6 +644,7 @@ function construirPerfilJugador(historial, nombre) {
 
   return {
     racha: calcularRacha(historial, nombre),
+    rachaMaxima: calcularRachaMaxima(historial, nombre),
     h2h,
     ultimos: partidos.slice(0, 5),
   };
@@ -642,7 +709,12 @@ function generarTitular(p, coronacion, rachaRota) {
 
 function calcularRankingEstilo(historial) {
   const porJugador = {};
-  const ensure = (n) => { if (!porJugador[n]) porJugador[n] = { parciales: 0, deuceJugados: 0, deuceGanados: 0 }; };
+  const ensure = (n) => {
+    if (!porJugador[n]) porJugador[n] = {
+      parciales: 0, deuceJugados: 0, deuceGanados: 0,
+      canastaJugados: 0, canastaGanados: 0, columpiosJugados: 0, columpiosGanados: 0,
+    };
+  };
   historial.forEach((p) => {
     if (!p.teamA || !p.teamB || p.teamA.length !== 1 || p.teamB.length !== 1) return;
     const [a] = p.teamA, [b] = p.teamB;
@@ -655,13 +727,22 @@ function calcularRankingEstilo(historial) {
       porJugador[a].deuceJugados += 1; porJugador[b].deuceJugados += 1;
       porJugador[ganador].deuceGanados += 1;
     }
+    if (p.ladoA === "Canasta") { porJugador[a].canastaJugados++; if (ganador === a) porJugador[a].canastaGanados++; }
+    else if (p.ladoA === "Columpios") { porJugador[a].columpiosJugados++; if (ganador === a) porJugador[a].columpiosGanados++; }
+    if (p.ladoB === "Canasta") { porJugador[b].canastaJugados++; if (ganador === b) porJugador[b].canastaGanados++; }
+    else if (p.ladoB === "Columpios") { porJugador[b].columpiosJugados++; if (ganador === b) porJugador[b].columpiosGanados++; }
   });
   const top = (campo, minimo) => Object.entries(porJugador)
     .filter(([, v]) => (campo === "deuce" ? v.deuceJugados >= minimo : v[campo] >= minimo))
     .sort((x, y) => (campo === "deuce" ? (y[1].deuceGanados / y[1].deuceJugados) - (x[1].deuceGanados / x[1].deuceJugados) : y[1][campo] - x[1][campo]))[0];
+  const topLado = (jugadosCampo, ganadosCampo, minimo) => Object.entries(porJugador)
+    .filter(([, v]) => v[jugadosCampo] >= minimo)
+    .sort((x, y) => (y[1][ganadosCampo] / y[1][jugadosCampo]) - (x[1][ganadosCampo] / x[1][jugadosCampo]))[0];
   return {
     reyParciales: top("parciales", 1),
     reyDeuce: top("deuce", 1),
+    reyCanasta: topLado("canastaJugados", "canastaGanados", 2),
+    reyColumpios: topLado("columpiosJugados", "columpiosGanados", 2),
     porJugador,
   };
 }
@@ -1306,11 +1387,18 @@ function ModalPerfil({ nombre, perfil, rating, statsAvanzadas, onCerrar, puedeEd
         </div>
 
 
-        {Math.abs(perfil.racha) >= 2 && (
-          <div className="mb-4">
-             <Chip tone={perfil.racha > 0 ? "gold" : "info"}>
-               {perfil.racha > 0 ? "🔥" : "❄️"} {Math.abs(perfil.racha)} {perfil.racha > 0 ? "victorias" : "derrotas"} seguidas
-             </Chip>
+        {(Math.abs(perfil.racha) >= 2 || perfil.rachaMaxima >= 2) && (
+          <div className="mb-4 flex flex-wrap gap-2">
+             {Math.abs(perfil.racha) >= 2 && (
+               <Chip tone={perfil.racha > 0 ? "gold" : "info"}>
+                 {perfil.racha > 0 ? "🔥" : "❄️"} {Math.abs(perfil.racha)} {perfil.racha > 0 ? "victorias" : "derrotas"} seguidas
+               </Chip>
+             )}
+             {perfil.rachaMaxima >= 2 && (
+               <Chip tone="gold">
+                 🏆 racha histórica: {perfil.rachaMaxima} victorias
+               </Chip>
+             )}
           </div>
         )}
 
@@ -1481,6 +1569,8 @@ export default function CasaApuestasPingpong() {
   const prevSlipLen = useRef(0);
   const csvInputRef = useRef(null);
   const [csvImportMsg, setCsvImportMsg] = useState(null); // { tipo: "ok"|"error", texto }
+  const [modalResumen, setModalResumen] = useState(false);
+  const resumenRef = useRef(null);
   const [editandoPartido, setEditandoPartido] = useState(null);
   const ultimoSincronizado = useRef(null);
 
@@ -2220,6 +2310,18 @@ export default function CasaApuestasPingpong() {
     reader.readAsText(archivo, "utf-8");
   }
 
+  async function descargarResumenTemporada() {
+    if (!resumenRef.current) return;
+    const canvas = await html2canvas(resumenRef.current, { backgroundColor: "#14161c", scale: 2, useCORS: true });
+    const dataUrl = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `pino-pong-resumen-${new Date().toISOString().slice(0, 10)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
   // --- DERIVACIÓN DE DATOS PARA LA VISTA ---
   let pA_punto = null, mercados = null, ctxPartido = null;
 
@@ -2320,6 +2422,7 @@ export default function CasaApuestasPingpong() {
   const estadisticasApostantes = calcularEstadisticasApostantes(estado.historial || [], estado.bettors || {});
   const rankingEstilo = calcularRankingEstilo(estado.historial || []);
   const statsCampos = calcularEstadisticasGlobales(estado.historial || []);
+  const serieElo = construirSerieElo(estado.historial || []);
 
   const TABS = [
     { id: "partido", label: "Apuestas", icon: Swords },
@@ -2991,7 +3094,26 @@ export default function CasaApuestasPingpong() {
               )}
             </Panel>
 
-            {(rankingEstilo.reyParciales || rankingEstilo.reyDeuce) && (
+            {serieElo.serie.length > 1 && (
+              <Panel icon={TrendingUp} titulo="📈 Evolución del ELO">
+                <div style={{ width: "100%", height: 260 }}>
+                  <ResponsiveContainer>
+                    <LineChart data={serieElo.serie} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                      <XAxis dataKey="partido" tick={{ fontSize: 10 }} label={{ value: "partidos", position: "insideBottom", offset: -2, fontSize: 10 }} />
+                      <YAxis tick={{ fontSize: 10 }} domain={["dataMin - 30", "dataMax + 30"]} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      {serieElo.nombres.map((n) => (
+                        <Line key={n} type="monotone" dataKey={n} stroke={colorFromName(n)} dot={false} strokeWidth={2} />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </Panel>
+            )}
+
+            {(rankingEstilo.reyParciales || rankingEstilo.reyDeuce || rankingEstilo.reyCanasta || rankingEstilo.reyColumpios) && (
               <Panel icon={Trophy} titulo="🏅 Estilos de la temporada">
                 <div className="space-y-1.5 text-sm">
                   {rankingEstilo.reyParciales && (
@@ -2999,6 +3121,12 @@ export default function CasaApuestasPingpong() {
                   )}
                   {rankingEstilo.reyDeuce && (
                     <div className="flex justify-between"><span className="c-text-2">😅 Rey del deuce</span><span className="font-bold c-text-1">{rankingEstilo.reyDeuce[0]} ({rankingEstilo.reyDeuce[1].deuceGanados}/{rankingEstilo.reyDeuce[1].deuceJugados})</span></div>
+                  )}
+                  {rankingEstilo.reyCanasta && (
+                    <div className="flex justify-between"><span className="c-text-2">🧺 Rey de la Canasta</span><span className="font-bold c-text-1">{rankingEstilo.reyCanasta[0]} ({rankingEstilo.reyCanasta[1].canastaGanados}/{rankingEstilo.reyCanasta[1].canastaJugados})</span></div>
+                  )}
+                  {rankingEstilo.reyColumpios && (
+                    <div className="flex justify-between"><span className="c-text-2">🎠 Rey de los Columpios</span><span className="font-bold c-text-1">{rankingEstilo.reyColumpios[0]} ({rankingEstilo.reyColumpios[1].columpiosGanados}/{rankingEstilo.reyColumpios[1].columpiosJugados})</span></div>
                   )}
                 </div>
               </Panel>
@@ -3018,6 +3146,11 @@ export default function CasaApuestasPingpong() {
 
         {tab === "historial" && (
           <div className="space-y-3">
+            {(estado.historial || []).length > 0 && (
+              <button onClick={() => setModalResumen(true)} className="w-full rounded-lg c-bg-orange c-text-dark-on-accent text-sm font-bold py-2.5">
+                📤 Exportar resumen de temporada
+              </button>
+            )}
             {(estado.historial || []).length > 0 && (
               <button onClick={exportarHistorial} className="w-full rounded-lg border border-dashed c-bd-orange c-text-orange text-sm font-semibold py-2.5 bg-white">
                 ⬇️ Exportar historial a CSV
@@ -3064,7 +3197,7 @@ export default function CasaApuestasPingpong() {
                       )
                     }
                   >
-                    {p.titular && <p style={{ fontFamily: "'Caveat', cursive" }} className="text-lg c-text-mesa font-bold leading-tight">"{p.titular}"</p>}
+                    {p.titular && <p style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.03em" }} className="text-xl c-text-mesa font-bold leading-tight uppercase">"{p.titular}"</p>}
                     <div style={{ fontFamily: "'Bebas Neue', sans-serif" }} className="text-lg tracking-wide c-text-1 flex items-center gap-2 flex-wrap">
                       {p.aLabel} <span className={p.ganador === p.aLabel ? "c-text-green" : "c-text-red2"}>{p.pa}</span> – <span className={p.ganador === p.bLabel ? "c-text-green" : "c-text-red2"}>{p.pb}</span> {p.bLabel} {p.esGM && "👑"}
                     </div>
@@ -3314,6 +3447,75 @@ export default function CasaApuestasPingpong() {
           </div>
         </div>
       )}
+
+      {modalResumen && (() => {
+        const resumen = construirResumenTemporada(estado);
+        return (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setModalResumen(false)}>
+            <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm space-y-3">
+              <div ref={resumenRef} style={{ background: "#14161c", fontFamily: "'Inter', sans-serif" }} className="rounded-2xl p-5 border border-white/10">
+                <div className="text-center mb-4">
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.05em" }} className="text-3xl">
+                    <span style={{ color: "#0E6E4E" }}>PINO</span><span style={{ color: "#FF5A1F" }}>-PONG</span>
+                  </div>
+                  <div className="text-[11px] text-white/50 mt-0.5">Resumen de temporada · {resumen.fecha}</div>
+                </div>
+
+                {resumen.gm && (
+                  <div className="flex items-center justify-center gap-2 mb-4 rounded-xl py-2" style={{ background: "rgba(255,215,120,0.08)" }}>
+                    <Crown size={18} style={{ color: "#FFD778" }} />
+                    <span className="text-white font-bold text-sm">Gran Maestro: {resumen.gm}</span>
+                  </div>
+                )}
+
+                <div className="mb-4">
+                  <div className="text-[10px] uppercase tracking-wide text-white/40 font-bold mb-1.5">Ranking ELO</div>
+                  <div className="space-y-1">
+                    {resumen.top5.map(([n, r], i) => (
+                      <div key={n} className="flex items-center justify-between text-sm">
+                        <span className="text-white/85">{i + 1}. {n}</span>
+                        <span className="font-bold" style={{ color: "#FF5A1F" }}>{r.toFixed(0)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
+                  <div className="rounded-lg p-2 text-center" style={{ background: "rgba(255,255,255,0.05)" }}>
+                    <div className="text-white/50">Partidos jugados</div>
+                    <div className="text-white font-bold text-lg">{resumen.totalPartidos}</div>
+                  </div>
+                  <div className="rounded-lg p-2 text-center" style={{ background: "rgba(255,255,255,0.05)" }}>
+                    <div className="text-white/50">Racha activa</div>
+                    <div className="text-white font-bold text-lg">{resumen.mejorActiva.nombre ? `${resumen.mejorActiva.nombre} (${resumen.mejorActiva.valor})` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg p-2 text-center col-span-2" style={{ background: "rgba(255,255,255,0.05)" }}>
+                    <div className="text-white/50">Racha histórica más larga</div>
+                    <div className="text-white font-bold text-lg">{resumen.mejorHistorica.nombre ? `${resumen.mejorHistorica.nombre} (${resumen.mejorHistorica.valor} victorias)` : "—"}</div>
+                  </div>
+                </div>
+
+                {(resumen.estilo.reyParciales || resumen.estilo.reyDeuce || resumen.estilo.reyCanasta || resumen.estilo.reyColumpios) && (
+                  <div className="space-y-1 text-xs">
+                    <div className="text-[10px] uppercase tracking-wide text-white/40 font-bold mb-1">Estilos</div>
+                    {resumen.estilo.reyParciales && <div className="flex justify-between text-white/80"><span>🥊 Rey de los parciales</span><span className="font-bold text-white">{resumen.estilo.reyParciales[0]}</span></div>}
+                    {resumen.estilo.reyDeuce && <div className="flex justify-between text-white/80"><span>😅 Rey del deuce</span><span className="font-bold text-white">{resumen.estilo.reyDeuce[0]}</span></div>}
+                    {resumen.estilo.reyCanasta && <div className="flex justify-between text-white/80"><span>🧺 Rey de la Canasta</span><span className="font-bold text-white">{resumen.estilo.reyCanasta[0]}</span></div>}
+                    {resumen.estilo.reyColumpios && <div className="flex justify-between text-white/80"><span>🎠 Rey de los Columpios</span><span className="font-bold text-white">{resumen.estilo.reyColumpios[0]}</span></div>}
+                  </div>
+                )}
+
+                <div className="text-center text-[10px] text-white/30 mt-4">Donde se demuestra quién tiene de verdad madera de campeones.</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setModalResumen(false)} className="rounded-lg border c-bd-1 c-text-2 bg-white py-2.5 text-sm font-semibold">Cerrar</button>
+                <button onClick={descargarResumenTemporada} className="rounded-lg c-bg-orange c-text-dark-on-accent py-2.5 text-sm font-bold">⬇️ Descargar imagen</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {modalCuentas && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setModalCuentas(false)}>
